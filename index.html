@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Kbh Bar til Bar</title>
+  <meta name="description" content="Bar-til-bar-runde i København fra Imperial Hotel: 7 barer, 3D-kart, gåtur i gatene, drinker, oppgaver og poengtavle for lagene.">
+  <meta name="theme-color" content="#0a0f1d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Bar til Bar">
+  <meta property="og:title" content="Kbh Bar til Bar">
+  <meta property="og:description" content="7 barer i København, 3D-kart, drinker, oppgaver og poengtavle for lagene.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=IBM+Plex+Mono:wght@500;600&family=Manrope:wght@400..800&display=swap">
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div id="map" class="map" aria-label="3D-kart over ruten"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-tag">KBH</span>
+      <span class="brand-name">Bar til bar</span>
+    </div>
+    <div class="topbar-right">
+      <span class="progress" id="progress"></span>
+      <button class="leader" id="leader-chip" type="button" data-action="tab" data-tab="score"></button>
+    </div>
+  </header>
+
+  <div class="map-controls" role="toolbar" aria-label="Kartvalg" id="map-controls"></div>
+
+  <div class="live-hud" id="live-hud" hidden></div>
+
+  <section class="sheet" id="sheet" data-state="peek" aria-label="Kveldens rute">
+    <div class="sheet-grab" id="sheet-grab" role="button" tabindex="0" aria-label="Vis eller skjul panelet"><span></span></div>
+    <div class="peek" id="peek"></div>
+    <div class="walk-hud" id="walk-hud" hidden></div>
+    <nav class="tabs" role="tablist" id="tabs">
+      <button role="tab" type="button" data-tab="route" id="tab-route">Rute</button>
+      <button role="tab" type="button" data-tab="bar" id="tab-bar">Bar</button>
+      <button role="tab" type="button" data-tab="score" id="tab-score">Poeng</button>
+      <button role="tab" type="button" data-tab="teams" id="tab-teams">Lag</button>
+    </nav>
+    <div class="sheet-body" id="sheet-body" role="tabpanel"></div>
+  </section>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="modal" id="modal" hidden></div>
+
+  <script src="vendor/maplibre-gl.js"></script>
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>
