@@ -1,7 +1,7 @@
 import { HOTEL, BARS, CATEGORIES, TEAM_COLORS, FINALE_TASKS, DEFAULT_FINALE, sketchLeg } from './data.js';
 import { CONFIG } from './config.js';
 import { createStore } from './store.js';
-import { planRoutes, startMinutes } from './plan.js';
+import { planRoutes } from './plan.js';
 import {
   icon, $, esc, haversine, bearingBetween, cumulative, pointAlong, smoothAngle,
   fmtDist, fmtMin, fmtClock, uid, readJSON, writeJSON,
@@ -13,6 +13,8 @@ const ROUTE_CACHE_KEY = 'kbh:routes:v2';
 const WALK_SPEED = 1.25; // m/s, rolig gruppetempo
 const WALK_SPEEDS = [{ label: 'Rolig', v: 6 }, { label: 'Normal', v: 14 }, { label: 'Rask', v: 32 }];
 const ARRIVE_RADIUS = 45;
+// Rekkefølgen på barene regnes ut fra dette klokkeslettet. Det er et utgangspunkt, ikke starttiden for laget.
+const PLAN_START = '18:00';
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const desktopMQ = matchMedia('(min-width: 900px)');
 
@@ -54,7 +56,7 @@ const barIndex = (id) => BARS.findIndex((b) => b.id === id);
 const finaleIdx = () => { const i = barIndex(S().finale); return i >= 0 ? i : barIndex(DEFAULT_FINALE); };
 const teamById = (id) => S().teams.find((t) => t.id === id);
 const myTeam = () => teamById(prefs.myTeam) || null;
-const plan = () => planRoutes(S().teams, finaleIdx(), S().startTime, S().routes);
+const plan = () => planRoutes(S().teams, finaleIdx(), PLAN_START, S().routes);
 
 function ctx() {
   const team = myTeam();
@@ -63,7 +65,7 @@ function ctx() {
   const prog = (team && S().progress[team.id]) || { here: -1, visited: [] };
   const herePos = seq.indexOf(prog.here);
   const nextPos = herePos + 1;
-  return { team, seq, here: prog.here, visited: new Set(prog.visited), herePos, nextPos, nextBar: nextPos < seq.length ? seq[nextPos] : -1 };
+  return { team, seq, here: prog.here, visited: new Set(prog.visited), startedAt: prog.startedAt ?? null, herePos, nextPos, nextBar: nextPos < seq.length ? seq[nextPos] : -1 };
 }
 
 function teamsAt() {
@@ -86,8 +88,9 @@ function viewState() {
   };
 }
 
+// Minutter etter at laget startet. Runden har ingen fast starttid.
 function schedule(seq) {
-  let t = startMinutes(S().startTime);
+  let t = 0;
   const arrive = [];
   seq.forEach((b, pos) => {
     t += (legs[pos]?.duration ?? 600) / 60;
@@ -96,6 +99,23 @@ function schedule(seq) {
   });
   t += (legs[seq.length]?.duration ?? 600) / 60;
   return { arrive, home: t };
+}
+
+function fmtOffset(min) {
+  const m = Math.round(min);
+  return m >= 60 ? `${Math.floor(m / 60)} t ${String(m % 60).padStart(2, '0')} min` : `${m} min`;
+}
+
+// Klokkeslett når laget har startet, ellers tiden etter start.
+function eta(offset, startedAt) {
+  if (!startedAt) return `+${fmtOffset(offset)}`;
+  const d = new Date(startedAt);
+  return `ca. ${fmtClock(d.getHours() * 60 + d.getMinutes() + offset)}`;
+}
+
+function hhmm(ts) {
+  const d = new Date(ts);
+  return fmtClock(d.getHours() * 60 + d.getMinutes());
 }
 
 function teamScore(teamId) {
@@ -537,7 +557,7 @@ function memberEvent(m, teamId, changes = {}) {
 }
 
 function lockRoutes(finaleId = S().finale) {
-  const fresh = planRoutes(S().teams, barIndex(finaleId), S().startTime, {});
+  const fresh = planRoutes(S().teams, barIndex(finaleId), PLAN_START, {});
   return S().teams.map((t) => ({ o: 'rt', tm: t.id, ord: fresh[t.id] }));
 }
 
@@ -684,6 +704,7 @@ function describe(e) {
     }
     case 'adj': return `${team} ${e.d > 0 ? 'fikk' : 'mistet'} ${Math.abs(e.d)} dommerpoeng${bar ? ` på ${bar.name}` : ''}`;
     case 'here': return Number.isInteger(e.v) && BARS[e.v] ? `${team} sjekket inn på ${BARS[e.v].name}` : null;
+    case 'stt': return e.v ? `${team} startet runden` : null;
     case 'go': return e.v ? 'Kvelden er i gang!' : null;
     case 'fin': return `Finalen er flyttet til ${BARS.find((b) => b.id === e.v)?.name || 'en ny bar'}`;
     case 'rst': return 'Kvelden ble nullstilt';
@@ -857,7 +878,7 @@ function renderPeek() {
       <div class="peek-card">
         <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${pos + 1}</span></div>
         <div class="peek-text">
-          <div class="eyebrow">Stopp ${pos + 1} · ca. ${fmtClock(sched.arrive[pos])}</div>
+          <div class="eyebrow">Stopp ${pos + 1} · ${eta(sched.arrive[pos], c.startedAt)}</div>
           <h2 class="peek-title">${esc(bar.name)}</h2>
           <div class="peek-meta">${esc(cat.label)} · ${esc(bar.address)}</div>
         </div>
@@ -891,12 +912,14 @@ function renderPeek() {
       <div class="peek-card">
         <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${c.nextPos + 1}</span></div>
         <div class="peek-text">
-          <div class="eyebrow">${c.team ? `${esc(c.team.name)} · ` : ''}${isFinale ? 'Finale' : 'Neste'} · <b>ca. ${fmtClock(sched.arrive[c.nextPos])}</b></div>
+          <div class="eyebrow">${c.team ? `${esc(c.team.name)} · ` : ''}${isFinale ? 'Finale' : 'Neste'} · <b>${eta(sched.arrive[c.nextPos], c.startedAt)}</b></div>
           <h2 class="peek-title">${esc(bar.name)}</h2>
           <div class="peek-meta">${esc(cat.label)} · ${fmtDist(leg?.distance || 0)} · ${fmtMin(leg?.duration || 60)} å gå</div>
         </div>
         <div class="peek-actions">
-          <button class="btn btn-primary" type="button" data-action="walk" data-leg="${c.nextPos}">${icon('walk')} 3D-gåtur</button>
+          ${c.team && !c.startedAt
+            ? `<button class="btn btn-primary" type="button" data-action="team-start">${icon('walk')} Vi starter nå</button>`
+            : `<button class="btn btn-primary" type="button" data-action="walk" data-leg="${c.nextPos}">${icon('walk')} 3D-gåtur</button>`}
           <button class="btn" type="button" data-action="live">${icon('gps')} Gå live</button>
           <button class="btn" type="button" data-action="select-bar" data-i="${c.nextBar}">Oppgaver</button>
         </div>
@@ -951,7 +974,7 @@ function viewRoute() {
           <span class="tl-name">${esc(bar.name)}</span>
           <span class="tl-sub">${esc(cat.label)} · ${others.length ? `${others.map((t) => esc(t.name)).join(', ')} er her nå` : esc(bar.tagline)}</span>
         </button>
-        <span class="tl-time">${status || `ca. ${fmtClock(sched.arrive[pos])}`}</span>
+        <span class="tl-time">${status || eta(sched.arrive[pos], c.startedAt)}</span>
       </li>`;
   }).join('');
   const allRoutes = S().teams.map((t) => {
@@ -970,7 +993,7 @@ function viewRoute() {
     </div>
     <div class="stats">
       <div class="stat"><b>${fmtDist(totalDist)}</b><span>gange totalt</span></div>
-      <div class="stat"><b>${fmtClock(sched.arrive[c.seq.length - 1] || 0)}</b><span>finale ca.</span></div>
+      <div class="stat"><b>${eta(sched.arrive[c.seq.length - 1] || 0, c.startedAt)}</b><span>til finale</span></div>
       <div class="stat"><b>${BARS.length}</b><span>barer</span></div>
     </div>
     <ol class="timeline" aria-label="Ruta">
@@ -980,7 +1003,7 @@ function viewRoute() {
           <span class="tl-name">${esc(HOTEL.name)}</span>
           <span class="tl-sub">Start · ${esc(HOTEL.address)}</span>
         </button>
-        <span class="tl-time">${esc(S().startTime)}</span>
+        <span class="tl-time">${c.startedAt ? hhmm(c.startedAt) : 'Ikke startet'}</span>
       </li>
       ${stops}
       ${legRow(c.seq.length)}
@@ -990,9 +1013,10 @@ function viewRoute() {
           <span class="tl-name">Hjem til hotellet</span>
           <span class="tl-sub">${esc(HOTEL.address)}</span>
         </button>
-        <span class="tl-time">ca. ${fmtClock(sched.home)}</span>
+        <span class="tl-time">${eta(sched.home, c.startedAt)}</span>
       </li>
     </ol>
+    ${c.team && !c.startedAt ? `<button class="btn btn-primary btn-block" type="button" data-action="team-start">${icon('walk')} Vi starter nå</button>` : ''}
     <button class="btn btn-block" type="button" data-action="overview">${icon('overview')} Se hele ruta i 3D</button>
     <section class="section">
       <h3 class="section-title">Alle lagenes ruter</h3>
@@ -1001,7 +1025,7 @@ function viewRoute() {
     <p class="note">${routeSource === 'osm'
       ? 'Gangrutene følger ekte gater fra OpenStreetMap.'
       : 'Rutene er omtrentlige til appen får kontakt med rutetjenesten.'}
-      Tidene regnes ut fra starttid ${esc(S().startTime)} og tiden på hver bar. Endre starttid og finale under <b>Lag</b>.</p>`;
+      Tidene regnes ut fra når hvert lag trykker «Vi starter nå», og tiden på hver bar. Finalen velger du under <b>Lag</b>.</p>`;
 }
 
 function viewBar() {
@@ -1038,7 +1062,7 @@ function viewBar() {
 
   return `
     <div class="bar-head">
-      <div class="bar-head-row">${catChip(bar.cat)} ${barStatus(i, c)} <span class="eyebrow">Stopp ${pos + 1} av ${BARS.length} · ca. ${fmtClock(sched.arrive[pos])}</span></div>
+      <div class="bar-head-row">${catChip(bar.cat)} ${barStatus(i, c)} <span class="eyebrow">Stopp ${pos + 1} av ${BARS.length} · ${eta(sched.arrive[pos], c.startedAt)}</span></div>
       <h2 class="h-display">${esc(bar.name)}</h2>
       <div class="address">${icon('map')}<span>${esc(bar.address)}</span>
         <button class="icon-btn" type="button" data-action="copy" data-text="${esc(`${bar.name}, ${bar.address}`)}" aria-label="Kopier adressen">${icon('copy')}</button>
@@ -1182,10 +1206,6 @@ function viewTeams() {
     <div class="row-wrap">
       ${S().teams.length < TEAM_COLORS.length ? `<button class="btn" type="button" data-action="add-team">${icon('plus')} Legg til lag</button>` : ''}
       <button class="btn" type="button" data-action="shuffle-teams">${icon('shuffle')} Bland lagene</button>
-    </div>
-    <div class="field">
-      <label for="start-time">Starttid fra hotellet</label>
-      <input class="input input-time" type="time" id="start-time" value="${esc(S().startTime)}">
     </div>
     <div class="field">
       <label for="finale">Finale, der alle lagene møtes</label>
@@ -1362,6 +1382,13 @@ function onClick(e) {
     case 'shuffle-teams':
       shuffleTeams();
       break;
+    case 'team-start': {
+      const team = myTeam();
+      if (!team) return askTeam();
+      store.dispatch([{ o: 'stt', tm: team.id, v: Date.now() }], team.id);
+      toast(`${team.name} er i gang. Lykke til!`);
+      break;
+    }
     case 'start-night':
       store.dispatch([{ o: 'go', v: true }, ...lockRoutes()], by());
       tab = 'route';
@@ -1409,9 +1436,7 @@ function onInput(e) {
 
 function onChangeField(e) {
   const t = e.target;
-  if (t.id === 'start-time' && t.value && t.value !== S().startTime) {
-    store.dispatch([{ o: 'st', v: t.value }], by());
-  } else if (t.id === 'finale' && t.value !== S().finale) {
+  if (t.id === 'finale' && t.value !== S().finale) {
     const list = [{ o: 'fin', v: t.value }];
     if (S().setupDone) list.push(...lockRoutes(t.value));
     store.dispatch(list, by());

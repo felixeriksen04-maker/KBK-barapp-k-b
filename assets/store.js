@@ -36,7 +36,6 @@ function blank() {
     progress: new Map(), // lagId -> { here, visited:Set }
     routes: {},          // lagId -> [barindekser]
     finale: DEFAULT_FINALE,
-    startTime: '18:00',
     setupDone: false,
   };
 }
@@ -57,7 +56,8 @@ function keyOf(e) {
     case 'vis': return `vis|${e.tm}|${e.bar}`;
     case 'here': return `here|${e.tm}`;
     case 'rt': return `rt|${e.tm}`;
-    case 'fin': case 'st': case 'go': case 'rst': return e.o;
+    case 'stt': return `stt|${e.tm}`;
+    case 'fin': case 'go': case 'rst': return e.o;
     default: return null;
   }
 }
@@ -92,8 +92,8 @@ function apply(s, e) {
     case 'fin':
       if (typeof e.v === 'string') s.finale = e.v;
       break;
-    case 'st':
-      if (/^\d{2}:\d{2}$/.test(e.v)) s.startTime = e.v;
+    case 'stt':
+      progressOf(s, e.tm).startedAt = typeof e.v === 'number' ? e.v : null;
       break;
     case 'go':
       s.setupDone = !!e.v;
@@ -117,8 +117,8 @@ function derive(s) {
     ((awards[bar] ||= {})[task] ||= []).push(team);
   }
   const progress = {};
-  for (const [team, p] of s.progress) progress[team] = { here: p.here, visited: [...p.visited] };
-  return { teams, awards, adjust: s.adjust, progress, routes: s.routes, finale: s.finale, startTime: s.startTime, setupDone: s.setupDone };
+  for (const [team, p] of s.progress) progress[team] = { here: p.here, visited: [...p.visited], startedAt: p.startedAt ?? null };
+  return { teams, awards, adjust: s.adjust, progress, routes: s.routes, finale: s.finale, setupDone: s.setupDone };
 }
 
 export function createStore({ server, room, onChange, onStatus }) {
