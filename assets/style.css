@@ -121,6 +121,7 @@ button { font: inherit; color: inherit; }
 .brand-name { font: 700 var(--fs-lg)/1 var(--font-display); letter-spacing: -0.01em; white-space: nowrap; }
 .topbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .progress {
+  display: inline-flex; align-items: center; white-space: nowrap;
   font: 600 var(--fs-sm)/1 var(--font-mono); font-variant-numeric: tabular-nums;
   padding: 7px 10px; border-radius: 999px; background: rgba(23, 32, 54, 0.9); border: 1px solid var(--line);
 }
@@ -424,3 +425,54 @@ textarea.input { min-height: 140px; padding: 12px; font: 500 var(--fs-sm)/1.5 va
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 .peek-actions .btn-ghost, .walk-controls .btn-ghost { flex: 0 0 46px; padding: 0; }
+
+/* ---------- Sanntid ---------- */
+.sync-dot { --s: var(--muted); display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--s); margin-right: 7px; vertical-align: 1px; flex: none; }
+.sync-dot.is-live { --s: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+.sync-dot.is-connecting, .sync-dot.is-reconnecting { --s: var(--sodium); animation: blink 1.2s infinite; }
+.sync-dot.is-offline { --s: var(--bad); }
+@keyframes blink { 50% { opacity: 0.35; } }
+.sync-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-md); background: var(--panel-2); border: 1px solid var(--line); }
+.sync-card .sync-dot { margin: 0; width: 10px; height: 10px; }
+.sync-text { display: grid; flex: 1; min-width: 0; }
+.sync-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-label { display: inline-flex; align-items: center; letter-spacing: 0.04em; text-transform: none; font-family: var(--font-body); font-weight: 700; }
+.feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.feed li { display: grid; grid-template-columns: 46px 1fr; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); }
+.feed li:last-child { border-bottom: 0; }
+.feed-time { color: var(--muted); font-size: var(--fs-xs); padding-top: 2px; }
+
+/* ---------- Lagvalg og ruter per lag ---------- */
+.team-pick { display: grid; gap: 8px; }
+.team-pick-btn { --team: var(--muted); justify-content: flex-start; min-height: 52px; padding: 8px 14px; border-left: 4px solid var(--team); text-align: left; flex-wrap: wrap; gap: 4px 10px; white-space: normal; }
+.team-pick-btn > span:nth-child(2) { font: 800 var(--fs-lg)/1.2 var(--font-display); }
+.team-pick-btn .muted { width: 100%; padding-left: 22px; font-weight: 600; }
+.routes-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.routes-list li { display: grid; gap: 8px; padding: 12px; border-radius: var(--r-md); background: var(--panel-2); border: 1px solid var(--line); }
+.routes-list li.is-mine { border-color: color-mix(in srgb, var(--sodium) 55%, var(--line)); }
+.routes-team { display: flex; align-items: center; gap: 8px; font: 800 var(--fs-md)/1.2 var(--font-display); }
+.routes-chips { display: flex; flex-wrap: wrap; gap: 5px; font-size: var(--fs-xs); }
+.route-chip { --c: var(--muted); display: inline-block; padding: 3px 7px; border-radius: 6px; font-weight: 700; background: color-mix(in srgb, var(--c) 18%, transparent); color: color-mix(in srgb, var(--c) 70%, #fff); border: 1px solid color-mix(in srgb, var(--c) 35%, transparent); }
+.route-chip.is-done { opacity: 0.5; text-decoration: line-through; }
+.route-chip.is-here { background: var(--c); color: #0a0f1d; }
+.status.is-finale { background: color-mix(in srgb, #ff8fc8 20%, transparent); color: #ffb3da; }
+.pin-teams { display: flex; gap: 3px; margin-top: 4px; }
+.team-dot { --team: #fff; width: 10px; height: 10px; border-radius: 50%; background: var(--team); border: 2px solid rgba(10, 15, 29, 0.9); }
+.pin.is-finale .pin-head { box-shadow: 0 0 0 3px #ffd36b, 0 0 26px var(--c); }
+select.input { appearance: none; -webkit-appearance: none; padding-right: 36px; font-weight: 700; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.walk-controls .btn { padding: 0 10px; }
+
+/* ---------- Google 3D (Cesium) ---------- */
+.map .cesium-viewer, .map .cesium-widget, .map .cesium-widget canvas { width: 100%; height: 100%; }
+.map .cesium-viewer-bottom, .map .cesium-widget-credits { display: none; }
+.earth-credits {
+  position: fixed; z-index: 14; left: max(8px, var(--safe-l)); right: 64px; bottom: calc(var(--peek-h) + 6px);
+  font-size: 10px; line-height: 1.3; color: #e6e9f2; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); pointer-events: auto;
+}
+.earth-credits a { color: inherit; }
+.earth-credits img { max-height: 16px; vertical-align: middle; }
+.earth-credits .cesium-credit-lightbox-overlay { display: none; }
+@media (min-width: 900px) {
+  .earth-credits { left: 452px; bottom: 10px; }
+}
+.route-chip.is-here { opacity: 1; text-decoration: none; }

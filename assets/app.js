@@ -1,499 +1,147 @@
-import { HOTEL, BARS, CATEGORIES, TEAM_COLORS, FALLBACK_LEGS } from './data.js';
+import { HOTEL, BARS, CATEGORIES, TEAM_COLORS, FINALE_TASKS, DEFAULT_FINALE, sketchLeg } from './data.js';
+import { CONFIG } from './config.js';
+import { createStore } from './store.js';
+import { planRoutes, startMinutes } from './plan.js';
+import {
+  icon, $, esc, haversine, bearingBetween, cumulative, pointAlong, smoothAngle,
+  fmtDist, fmtMin, fmtClock, uid, readJSON, writeJSON,
+} from './util.js';
 
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const ROUTER_URL = 'https://routing.openstreetmap.de/routed-foot/route/v1/driving/';
-const STORE_KEY = 'kbh-bar-til-bar:v1';
-const ROUTE_KEY = 'kbh-bar-til-bar:route:v1';
+const PREFS_KEY = 'kbh:prefs';
+const ROUTE_CACHE_KEY = 'kbh:routes:v2';
 const WALK_SPEED = 1.25; // m/s, rolig gruppetempo
 const WALK_SPEEDS = [{ label: 'Rolig', v: 6 }, { label: 'Normal', v: 14 }, { label: 'Rask', v: 32 }];
 const ARRIVE_RADIUS = 45;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const desktopMQ = matchMedia('(min-width: 900px)');
 
-/* ---------- Ikoner ---------- */
-const ICONS = {
-  beer: '<path d="M6 8h9v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/><path d="M15 10h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-2"/><path d="M6 8a3 3 0 0 1 3-4 3 3 0 0 1 5 1 2.5 2.5 0 0 1 1 3"/>',
-  wine: '<path d="M8 3h8l-.5 5a3.5 3.5 0 0 1-7 0z"/><path d="M12 11.5V20"/><path d="M8.5 20h7"/>',
-  shot: '<path d="M7 5h10l-1.6 14.2a1 1 0 0 1-1 .8H9.6a1 1 0 0 1-1-.8z"/><path d="M7.6 10h8.8"/>',
-  cocktail: '<path d="M5 4h14l-7 8z"/><path d="M12 12v8"/><path d="M8.5 20h7"/><path d="M15 4l3-2"/>',
-  note: '<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
-  pig: '<circle cx="12" cy="13" r="7"/><ellipse cx="12" cy="15" rx="3" ry="2"/><path d="M11 15h.01M13 15h.01M9.5 11h.01M14.5 11h.01"/><path d="M6.6 8.4 5 5l3.6 1.4M17.4 8.4 19 5l-3.6 1.4"/>',
-  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
-  walk: '<circle cx="13" cy="4" r="1.6"/><path d="M10 21l2-6-2.5-2.5L10 8l3 1 2 3h3"/><path d="M9.5 12.5 7 21"/><path d="M10 8 7 10v3"/>',
-  gps: '<circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
-  overview: '<path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/><path d="M9 4v13M15 7v13"/>',
-  north: '<path class="north-needle" d="M12 3l4.5 15L12 15l-4.5 3z"/>',
-  play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>',
-  pause: '<path d="M8 5v14M16 5v14"/>',
-  close: '<path d="M6 6l12 12M18 6 6 18"/>',
-  check: '<path d="M4.5 12.5l5 5 10-11"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  minus: '<path d="M5 12h14"/>',
-  trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4"/><path d="M12 13v4M8.5 20h7M10 17h4"/>',
-  share: '<path d="M12 3v12M7.5 7.5 12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>',
-  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
-  nav: '<path d="M12 2 19 20l-7-4-7 4z"/>',
-  dice: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h.01M15 15h.01M15 9h.01M9 15h.01M12 12h.01"/>',
-  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-  shuffle: '<path d="M3 7h3.5c4 0 6 10 10 10H21M3 17h3.5c1.6 0 2.8-1.6 3.9-3.6M14 10.2C15 8.5 15.6 7 17 7h4"/><path d="M18 4l3 3-3 3M18 14l3 3-3 3"/>',
-  hotel: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-5h6v5"/>',
-  map: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
-  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5a3.2 3.2 0 0 1 0 6.4M18 14.2A6 6 0 0 1 21 20"/>',
-};
-const icon = (name, cls = '') =>
-  `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
+/* ---------- Lokale innstillinger (bare denne telefonen) ---------- */
+const prefs = Object.assign({ selected: 0, night: null, myTeam: null, cam: 'drone', engine: null, googleKey: '' }, readJSON(PREFS_KEY) || {});
+const savePrefs = () => writeJSON(PREFS_KEY, prefs);
 
-/* ---------- Hjelpere ---------- */
-const $ = (sel) => document.querySelector(sel);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const toRad = (d) => (d * Math.PI) / 180;
-const toDeg = (r) => (r * 180) / Math.PI;
+/* ---------- Delt tilstand i sanntid ---------- */
+const params = new URLSearchParams(location.search);
+const room = (params.get('rom') || CONFIG.sync?.room || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+let initialSynced = false;
+const store = createStore({
+  server: CONFIG.sync?.server,
+  room,
+  onChange: (_state, remote) => {
+    if (remote?.length && initialSynced) announceRemote(remote);
+    scheduleRender();
+  },
+  onStatus: () => {
+    if (store.status === 'live' && !initialSynced) {
+      initialSynced = true;
+      maybeAskTeam();
+    }
+    renderTop();
+    if (tab === 'teams') scheduleRender();
+  },
+});
+const S = () => store.state;
 
-function haversine(a, b) {
-  const R = 6371000;
-  const dLat = toRad(b[1] - a[1]);
-  const dLng = toRad(b[0] - a[0]);
-  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
+let tab = S().setupDone ? 'route' : 'teams';
+let confirmReset = false;
+let peekBar = null;
+let routeSource = 'sketch';
+let legs = [];
+let legsKey = '';
+
+/* ---------- Avledet: lagets rute og fremdrift ---------- */
+const barIndex = (id) => BARS.findIndex((b) => b.id === id);
+const finaleIdx = () => { const i = barIndex(S().finale); return i >= 0 ? i : barIndex(DEFAULT_FINALE); };
+const teamById = (id) => S().teams.find((t) => t.id === id);
+const myTeam = () => teamById(prefs.myTeam) || null;
+const plan = () => planRoutes(S().teams, finaleIdx(), S().startTime, S().routes);
+
+function ctx() {
+  const team = myTeam();
+  const p = plan();
+  const seq = (team && p[team.id]) || p[S().teams[0]?.id] || BARS.map((_, i) => i);
+  const prog = (team && S().progress[team.id]) || { here: -1, visited: [] };
+  const herePos = seq.indexOf(prog.here);
+  const nextPos = herePos + 1;
+  return { team, seq, here: prog.here, visited: new Set(prog.visited), herePos, nextPos, nextBar: nextPos < seq.length ? seq[nextPos] : -1 };
 }
-function bearingBetween(a, b) {
-  const y = Math.sin(toRad(b[0] - a[0])) * Math.cos(toRad(b[1]));
-  const x = Math.cos(toRad(a[1])) * Math.sin(toRad(b[1])) - Math.sin(toRad(a[1])) * Math.cos(toRad(b[1])) * Math.cos(toRad(b[0] - a[0]));
-  return (toDeg(Math.atan2(y, x)) + 360) % 360;
-}
-function cumulative(coords) {
-  const out = [0];
-  for (let i = 1; i < coords.length; i++) out.push(out[i - 1] + haversine(coords[i - 1], coords[i]));
-  return out;
-}
-function pointAlong(coords, cum, d) {
-  if (d <= 0) return coords[0];
-  for (let i = 1; i < coords.length; i++) {
-    if (cum[i] >= d) {
-      const seg = cum[i] - cum[i - 1] || 1;
-      const t = (d - cum[i - 1]) / seg;
-      return [coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t, coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t];
+
+function teamsAt() {
+  const m = new Map();
+  for (const t of S().teams) {
+    const here = S().progress[t.id]?.here;
+    if (Number.isInteger(here) && here >= 0) {
+      if (!m.has(here)) m.set(here, []);
+      m.get(here).push(t);
     }
   }
-  return coords[coords.length - 1];
-}
-function smoothAngle(from, to, k) {
-  const diff = ((to - from + 540) % 360) - 180;
-  return (from + diff * k + 360) % 360;
-}
-const fmtDist = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(m / 10) * 10} m`);
-const fmtMin = (s) => `${Math.max(1, Math.round(s / 60))} min`;
-function fmtClock(minutes) {
-  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-}
-const uid = () => `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-
-function readJSON(key) {
-  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
-}
-function writeJSON(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* privat modus e.l. */ }
+  return m;
 }
 
-/* ---------- Tilstand ---------- */
-function defaultState() {
+function viewState() {
+  const c = ctx();
   return {
-    teams: [
-      { id: 't1', name: 'Lag 1', color: TEAM_COLORS[0], members: [] },
-      { id: 't2', name: 'Lag 2', color: TEAM_COLORS[1], members: [] },
-    ],
-    awards: {},
-    adjust: {},
-    here: -1,
-    visited: [],
-    selected: 0,
-    startTime: '18:00',
-    night: null,
-    setupDone: false,
+    nextPos: c.nextPos, next: c.nextBar, here: c.here, visited: c.visited, focus: peekBar,
+    order: new Map(c.seq.map((b, pos) => [b, pos])), finale: finaleIdx(), teamsAt: teamsAt(),
   };
 }
-const state = Object.assign(defaultState(), readJSON(STORE_KEY) || {});
-const save = () => writeJSON(STORE_KEY, state);
 
-let tab = state.setupDone ? 'route' : 'teams';
-let routeSource = 'fallback';
-let legs = FALLBACK_LEGS.map((coords) => makeLeg(coords));
-let confirmReset = false;
-
-function makeLeg(coords, distance) {
-  const cum = cumulative(coords);
-  const dist = distance ?? cum[cum.length - 1];
-  return { coords, cum, distance: dist, duration: dist / WALK_SPEED };
-}
-
-const nextIndex = () => state.here + 1; // 0..6 = bar, 7 = hjem
-const stopCoord = (i) => (i >= BARS.length || i < 0 ? HOTEL.coord : BARS[i].coord);
-const stopName = (i) => (i >= BARS.length || i < 0 ? HOTEL.name : BARS[i].name);
-const isNight = () => (state.night ?? autoNight());
-function autoNight() {
-  const h = new Date().getHours();
-  return h >= 16 || h < 7;
-}
-
-function schedule() {
-  const [h, m] = (state.startTime || '18:00').split(':').map(Number);
-  let t = h * 60 + m;
+function schedule(seq) {
+  let t = startMinutes(S().startTime);
   const arrive = [];
-  for (let i = 0; i < BARS.length; i++) {
-    t += legs[i].duration / 60;
+  seq.forEach((b, pos) => {
+    t += (legs[pos]?.duration ?? 600) / 60;
     arrive.push(t);
-    t += BARS[i].stay;
-  }
-  t += legs[BARS.length].duration / 60;
+    t += BARS[b].stay;
+  });
+  t += (legs[seq.length]?.duration ?? 600) / 60;
   return { arrive, home: t };
 }
 
 function teamScore(teamId) {
-  let s = 0;
-  for (const bar of BARS) s += barScore(bar, teamId);
-  return s;
+  return BARS.reduce((s, bar) => s + barScore(bar, teamId), 0);
 }
 function barScore(bar, teamId) {
   let s = 0;
-  const a = state.awards[bar.id] || {};
-  for (const task of bar.tasks) if ((a[task.id] || []).includes(teamId)) s += task.points;
-  return s + (state.adjust[bar.id]?.[teamId] || 0);
+  const a = S().awards[bar.id] || {};
+  for (const task of [...bar.tasks, ...FINALE_TASKS]) if ((a[task.id] || []).includes(teamId)) s += task.points;
+  return s + (S().adjust[bar.id]?.[teamId] || 0);
 }
 function ranking() {
-  return state.teams
-    .map((t) => ({ ...t, score: teamScore(t.id) }))
-    .sort((a, b) => b.score - a.score);
+  return S().teams.map((t) => ({ ...t, score: teamScore(t.id) })).sort((a, b) => b.score - a.score);
 }
 
-/* ---------- Kart ---------- */
-let map = null;
-let markers = [];
-let walker = null;
-let meMarker = null;
-let orbit = null;
-
-function initMap() {
-  if (!window.maplibregl) return showMapFallback('Kartbiblioteket ble ikke lastet. Sjekk nettet og last inn siden på nytt.');
-  try {
-    map = new maplibregl.Map({
-      container: 'map',
-      style: STYLE_URL,
-      center: [12.5735, 55.678],
-      zoom: 13.4,
-      pitch: 20,
-      bearing: 0,
-      maxPitch: 85,
-      attributionControl: { compact: true },
-      canvasContextAttributes: { antialias: true },
-    });
-  } catch (err) {
-    console.error(err);
-    return showMapFallback('3D-kartet trenger WebGL. Prøv en annen nettleser. Rute, oppgaver og poeng virker uansett.');
-  }
-
-  map.on('style.load', () => {
-    if (isNight()) applyNightPalette();
-    applyAtmosphere();
-    addRouteLayers();
-  });
-  map.once('load', () => {
-    updatePadding();
-    flyOverview(true);
-  });
-  map.on('error', (e) => {
-    if (e?.error?.message && /style/i.test(e.error.message)) toast('Fikk ikke lastet kartet. Sjekk nettforbindelsen.');
-  });
-  const zoomClasses = () => {
-    const z = map.getZoom();
-    $('#map').classList.toggle('labels-off', z < 13.6);
-    $('#map').classList.toggle('labels-few', z < 16.6);
-  };
-  map.on('zoom', zoomClasses);
-  zoomClasses();
-  map.on('rotate', () => {
-    const n = document.querySelector('#btn-north .north-needle');
-    if (n) n.style.transform = `rotate(${-map.getBearing()}deg)`;
-  });
-  const stopAuto = (e) => {
-    if (!e.originalEvent) return;
-    stopOrbit();
-    if (walk && walk.playing) { walk.playing = false; walk.looking = true; renderWalkHud(); }
-    if (live && live.follow) { live.follow = false; renderLiveHud(); }
-  };
-  for (const ev of ['dragstart', 'rotatestart', 'pitchstart', 'zoomstart']) map.on(ev, stopAuto);
-
-  addMarkers();
+/* ---------- Gangruter ---------- */
+function makeLeg(coords, distance) {
+  const cum = cumulative(coords);
+  const dist = distance ?? cum[cum.length - 1] * 1.15;
+  return { coords, cum, distance: dist, duration: dist / WALK_SPEED };
 }
 
-function showMapFallback(msg) {
-  $('#map').innerHTML = `<div class="map-fallback"><p>${esc(msg)}</p></div>`;
+function stopsFor(seq) {
+  return [{ id: 'hotel', coord: HOTEL.coord }, ...seq.map((b) => BARS[b]), { id: 'hotel', coord: HOTEL.coord }];
 }
 
-function firstSymbolId() {
-  return map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
-}
-
-function applyNightPalette() {
-  for (const layer of map.getStyle().layers) {
-    const { id, type } = layer;
-    try {
-      if (type === 'background') map.setPaintProperty(id, 'background-color', '#0c1222');
-      else if (type === 'fill') {
-        let c = '#121a2b';
-        if (/water/.test(id)) c = '#08182b';
-        else if (/park|wood|grass|forest|landcover|green|cemetery|pitch|garden/.test(id)) c = '#101e19';
-        else if (/building/.test(id)) c = '#192136';
-        map.setPaintProperty(id, 'fill-color', c);
-        if (!/water/.test(id)) map.setPaintProperty(id, 'fill-opacity', 1);
-      } else if (type === 'line') {
-        let c = '#283250';
-        if (/casing/.test(id)) c = '#141b2c';
-        else if (/water|river|canal|stream|ditch/.test(id)) c = '#0d2440';
-        else if (/rail|transit/.test(id)) c = '#2b3045';
-        else if (/boundary|admin/.test(id)) c = '#352f4d';
-        else if (/motorway|trunk|primary/.test(id)) c = '#3f4258';
-        else if (/path|pedestrian|footway|cycle|steps/.test(id)) c = '#343a52';
-        map.setPaintProperty(id, 'line-color', c);
-      } else if (type === 'fill-extrusion') {
-        map.setPaintProperty(id, 'fill-extrusion-color', [
-          'interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 10],
-          0, '#1a2236', 15, '#212b45', 30, '#283454', 60, '#303e63',
-        ]);
-        map.setPaintProperty(id, 'fill-extrusion-opacity', 0.97);
-      } else if (type === 'symbol') {
-        if (layer.layout?.['text-field']) {
-          map.setPaintProperty(id, 'text-color', /water/.test(id) ? '#4f7aa8' : '#c3cbe0');
-          map.setPaintProperty(id, 'text-halo-color', '#0a0f1d');
-          map.setPaintProperty(id, 'text-halo-width', 1.4);
-        }
-        if (layer.layout?.['icon-image']) map.setPaintProperty(id, 'icon-opacity', 0.55);
-      }
-    } catch { /* noen lag tåler ikke alle egenskaper */ }
-  }
-}
-
-function applyAtmosphere() {
-  const night = isNight();
-  try {
-    map.setSky(night
-      ? { 'sky-color': '#060a16', 'horizon-color': '#2b2140', 'fog-color': '#0c1222', 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.7, 'fog-ground-blend': 0.75, 'atmosphere-blend': 0 }
-      : { 'sky-color': '#76a9de', 'horizon-color': '#dfe9f4', 'fog-color': '#eef2f6', 'sky-horizon-blend': 0.5, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.8, 'atmosphere-blend': 0 });
-  } catch { /* eldre motor uten himmel */ }
-  map.setLight({ anchor: 'map', color: night ? '#ffd8a8' : '#ffffff', intensity: night ? 0.32 : 0.45, position: [1.4, 210, 35] });
-}
-
-function routeGeoJSON() {
-  const next = nextIndex();
-  return {
-    type: 'FeatureCollection',
-    features: legs.map((leg, i) => {
-      const st = i < next ? 'done' : i === next ? 'next' : 'future';
-      return {
-        type: 'Feature',
-        properties: { state: st, color: st === 'next' ? '#ffb547' : st === 'done' ? '#7f93bd' : '#d4daea' },
-        geometry: { type: 'LineString', coordinates: leg.coords },
-      };
-    }),
-  };
-}
-
-function circle(center, radius, steps = 28) {
-  const [lng, lat] = center;
-  const dLat = radius / 111320;
-  const dLng = radius / (111320 * Math.cos(toRad(lat)));
-  const ring = [];
-  for (let i = 0; i <= steps; i++) {
-    const a = (i / steps) * Math.PI * 2;
-    ring.push([lng + Math.cos(a) * dLng, lat + Math.sin(a) * dLat]);
-  }
-  return [ring];
-}
-
-function beamsGeoJSON() {
-  const next = nextIndex();
-  const features = [];
-  BARS.forEach((bar, i) => {
-    const color = CATEGORIES[bar.cat].color;
-    const done = state.visited.includes(bar.id) && i !== state.here;
-    const h = i === next ? 120 : i === state.here ? 90 : done ? 26 : 62;
-    features.push({ type: 'Feature', properties: { color, base: 0, height: h }, geometry: { type: 'Polygon', coordinates: circle(bar.coord, 2.6) } });
-    features.push({ type: 'Feature', properties: { color, base: h - 5, height: h }, geometry: { type: 'Polygon', coordinates: circle(bar.coord, 7.5) } });
-  });
-  return { type: 'FeatureCollection', features };
-}
-
-function glowGeoJSON() {
-  return {
-    type: 'FeatureCollection',
-    features: BARS.map((bar, i) => ({
-      type: 'Feature',
-      properties: { color: CATEGORIES[bar.cat].color, next: i === nextIndex() ? 1 : 0 },
-      geometry: { type: 'Point', coordinates: bar.coord },
-    })),
-  };
-}
-
-function addRouteLayers() {
-  const before = firstSymbolId();
-  map.addSource('route', { type: 'geojson', data: routeGeoJSON() });
-  map.addSource('beams', { type: 'geojson', data: beamsGeoJSON() });
-  map.addSource('glow', { type: 'geojson', data: glowGeoJSON() });
-
-  map.addLayer({
-    id: 'bar-glow', type: 'circle', source: 'glow',
-    paint: {
-      'circle-color': ['get', 'color'], 'circle-blur': 1, 'circle-pitch-alignment': 'map',
-      'circle-radius': ['interpolate', ['exponential', 2], ['zoom'], 13, ['case', ['==', ['get', 'next'], 1], 10, 6], 19, ['case', ['==', ['get', 'next'], 1], 260, 150]],
-      'circle-opacity': ['case', ['==', ['get', 'next'], 1], 0.55, 0.32],
-    },
-  }, before);
-  map.addLayer({
-    id: 'route-glow', type: 'line', source: 'route', filter: ['!=', ['get', 'state'], 'future'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 13, 8, 19, 30],
-      'line-blur': ['interpolate', ['linear'], ['zoom'], 13, 5, 19, 18],
-      'line-opacity': ['case', ['==', ['get', 'state'], 'next'], 0.5, 0.12],
-    },
-  }, before);
-  map.addLayer({
-    id: 'route-future', type: 'line', source: 'route', filter: ['==', ['get', 'state'], 'future'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 1.6, 19, 5], 'line-opacity': 0.6, 'line-dasharray': [1.2, 1.6] },
-  }, before);
-  map.addLayer({
-    id: 'route-line', type: 'line', source: 'route', filter: ['!=', ['get', 'state'], 'future'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 13, 2.4, 19, 9],
-      'line-opacity': ['case', ['==', ['get', 'state'], 'done'], 0.45, 1],
-    },
-  }, before);
-  map.addLayer({
-    id: 'beams', type: 'fill-extrusion', source: 'beams',
-    paint: {
-      'fill-extrusion-color': ['get', 'color'],
-      'fill-extrusion-height': ['get', 'height'],
-      'fill-extrusion-base': ['get', 'base'],
-      'fill-extrusion-opacity': 0.88,
-    },
-  }, before);
-}
-
-function refreshMapData() {
-  if (!map || !map.getSource('route')) return;
-  map.getSource('route').setData(routeGeoJSON());
-  map.getSource('beams').setData(beamsGeoJSON());
-  map.getSource('glow').setData(glowGeoJSON());
-}
-
-function addMarkers() {
-  markers.forEach((m) => m.remove());
-  markers = [];
-  const hotelEl = document.createElement('button');
-  hotelEl.type = 'button';
-  hotelEl.className = 'pin pin-hotel';
-  hotelEl.setAttribute('aria-label', 'Imperial Hotel, start og slutt');
-  hotelEl.innerHTML = `<span class="pin-head">${icon('hotel')}</span><span class="pin-label">${esc(HOTEL.name)}</span>`;
-  hotelEl.addEventListener('click', (e) => { e.stopPropagation(); flyTo(HOTEL.coord); });
-  markers.push(new maplibregl.Marker({ element: hotelEl, anchor: 'bottom' }).setLngLat(HOTEL.coord).addTo(map));
-
-  BARS.forEach((bar, i) => {
-    const el = document.createElement('button');
-    el.type = 'button';
-    el.className = 'pin';
-    el.dataset.i = i;
-    el.style.setProperty('--c', CATEGORIES[bar.cat].color);
-    el.setAttribute('aria-label', `${i + 1}. ${bar.name}, ${CATEGORIES[bar.cat].label}`);
-    el.innerHTML = `<span class="pin-head"><span class="pin-num">${i + 1}</span></span><span class="pin-label">${esc(bar.name)}</span>`;
-    el.addEventListener('click', (e) => { e.stopPropagation(); focusBar(i); });
-    markers.push(new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(bar.coord).addTo(map));
-  });
-  updateMarkers();
-}
-
-function updateMarkers() {
-  document.querySelectorAll('.pin[data-i]').forEach((el) => {
-    const i = Number(el.dataset.i);
-    el.classList.toggle('is-next', i === nextIndex());
-    el.classList.toggle('is-here', i === state.here);
-    el.classList.toggle('is-done', state.visited.includes(BARS[i].id) && i !== state.here);
-    el.classList.toggle('is-focus', i === peekBar);
-  });
-}
-
-function updatePadding() {
-  if (!map) return;
-  const sheet = $('#sheet');
-  if (desktopMQ.matches) {
-    map.setPadding({ top: 70, bottom: 30, left: sheet.offsetWidth + 32, right: 70 });
+function ensureLegs() {
+  const { seq } = ctx();
+  const key = seq.join('-');
+  if (key === legsKey) return;
+  legsKey = key;
+  const stops = stopsFor(seq);
+  const cache = readJSON(ROUTE_CACHE_KEY) || {};
+  if (cache[key]) {
+    legs = cache[key].map((l) => makeLeg(l.coords, l.distance));
+    routeSource = 'osm';
   } else {
-    const peekH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--peek-h')) || 200;
-    map.setPadding({ top: 70, bottom: peekH + 10, left: 10, right: 60 });
+    legs = stops.slice(1).map((s, k) => makeLeg(sketchLeg(stops[k].id, s.id, stops[k].coord, s.coord)));
+    routeSource = 'sketch';
+    fetchRoute(key, stops);
   }
+  engine?.setLegs(legs);
 }
 
-function allBounds() {
-  const b = new maplibregl.LngLatBounds(HOTEL.coord, HOTEL.coord);
-  BARS.forEach((bar) => b.extend(bar.coord));
-  legs.forEach((l) => l.coords.forEach((c) => b.extend(c)));
-  return b;
-}
-
-function flyOverview(intro = false) {
-  if (!map) return;
-  stopModes();
-  // Ruta går øst–vest, så på en stående mobilskjerm snus kartet slik at den fyller høyden.
-  // Zoomen velges slik at hele ruta holder seg i bildet mens kameraet sirkler rundt.
-  const portrait = map.getContainer().clientHeight > map.getContainer().clientWidth * 1.2;
-  const bearing = portrait ? -72 : -24;
-  const bounds = allBounds();
-  const cams = [bearing, bearing + 90].map((b) => map.cameraForBounds(bounds, { padding: 24, bearing: b })).filter(Boolean);
-  if (!cams.length) return;
-  const zoom = Math.min(...cams.map((c) => c.zoom)) + 0.35;
-  map.stop();
-  if (!reduceMotion) map.once('moveend', () => { startOrbit(); setControlState(); });
-  map.flyTo({ center: bounds.getCenter(), zoom, pitch: 56, bearing, duration: reduceMotion ? 0 : intro ? 2600 : 1500, essential: true });
-  setControlState();
-}
-
-function startOrbit() {
-  stopOrbit();
-  let last = performance.now();
-  const step = (now) => {
-    if (!orbit) return;
-    const dt = (now - last) / 1000;
-    last = now;
-    map.setBearing(map.getBearing() + dt * 3);
-    orbit = requestAnimationFrame(step);
-  };
-  orbit = requestAnimationFrame(step);
-}
-function stopOrbit() {
-  if (orbit) cancelAnimationFrame(orbit);
-  orbit = null;
-}
-
-function flyTo(coord, opts = {}) {
-  if (!map) return;
-  stopOrbit();
-  map.flyTo({ center: coord, zoom: 17.6, pitch: 62, bearing: map.getBearing(), duration: reduceMotion ? 0 : 1600, essential: true, ...opts });
-}
-
-/* ---------- Gangruter fra OpenStreetMap ---------- */
-async function loadRoutes() {
-  const cached = readJSON(ROUTE_KEY);
-  if (cached?.legs?.length === BARS.length + 1) {
-    applyLegs(cached.legs);
-    return;
-  }
-  const pts = [HOTEL.coord, ...BARS.map((b) => b.coord), HOTEL.coord];
-  const url = `${ROUTER_URL}${pts.map((p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(';')}?overview=false&steps=true&geometries=geojson`;
+async function fetchRoute(key, stops) {
+  const url = `${ROUTER_URL}${stops.map((s) => `${s.coord[0].toFixed(5)},${s.coord[1].toFixed(5)}`).join(';')}?overview=false&steps=true&geometries=geojson`;
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 12000);
@@ -502,51 +150,114 @@ async function loadRoutes() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     const route = json.routes?.[0];
-    if (!route || route.legs.length !== pts.length - 1) throw new Error('Ingen rute');
-    const out = route.legs.map((leg, i) => {
-      const coords = [pts[i]];
+    if (!route || route.legs.length !== stops.length - 1) throw new Error('Ingen rute');
+    const out = route.legs.map((leg, k) => {
+      const coords = [stops[k].coord];
       for (const step of leg.steps) {
         for (const c of step.geometry.coordinates) {
           const last = coords[coords.length - 1];
           if (last[0] !== c[0] || last[1] !== c[1]) coords.push(c);
         }
       }
-      coords.push(pts[i + 1]);
+      coords.push(stops[k + 1].coord);
       return { coords, distance: leg.distance };
     });
-    writeJSON(ROUTE_KEY, { legs: out, at: Date.now() });
-    applyLegs(out);
+    const cache = readJSON(ROUTE_CACHE_KEY) || {};
+    cache[key] = out;
+    writeJSON(ROUTE_CACHE_KEY, cache);
+    if (key !== legsKey) return;
+    legs = out.map((l) => makeLeg(l.coords, l.distance));
+    routeSource = 'osm';
+    engine?.setLegs(legs);
+    scheduleRender();
   } catch (err) {
     console.warn('Bruker omtrentlige ruter:', err);
   }
 }
-function applyLegs(raw) {
-  legs = raw.map((l) => makeLeg(l.coords, l.distance));
-  routeSource = 'osm';
-  refreshMapData();
-  render();
+
+/* ---------- Kartmotor ---------- */
+let engine = null;
+let engineKind = null;
+const googleKey = () => (prefs.googleKey || CONFIG.googleMapsApiKey || '').trim();
+const isNight = () => (prefs.night ?? autoNight());
+function autoNight() {
+  const h = new Date().getHours();
+  return h >= 16 || h < 7;
+}
+
+async function startEngine(kind) {
+  stopModes();
+  try { engine?.destroy(); } catch { /* allerede borte */ }
+  engine = null;
+  engineKind = null;
+  const container = $('#map');
+  container.innerHTML = '';
+  ensureLegs();
+  const common = {
+    legs, view: viewState(), night: isNight(),
+    onUser: onUserMove, onBar: focusBar, onHotel: () => engine?.flyTo(HOTEL.coord),
+    onRotate: (b) => { const n = document.querySelector('#btn-north .north-needle'); if (n) n.style.transform = `rotate(${-b}deg)`; },
+    onError: (msg) => toast(msg),
+  };
+  try {
+    if (kind === 'earth') {
+      const { createEarthEngine } = await import('./engine-earth.js');
+      engine = await createEarthEngine(container, { ...common, key: googleKey() });
+    } else {
+      const { createMapEngine } = await import('./engine-maplibre.js');
+      engine = await createMapEngine(container, common);
+    }
+    engineKind = kind;
+  } catch (err) {
+    console.error(err);
+    if (kind === 'earth') {
+      toast('Google 3D virket ikke. Sjekk at nøkkelen er riktig og har Map Tiles API. Viser vanlig 3D-kart.');
+      return startEngine('map');
+    }
+    container.innerHTML = '<div class="map-fallback"><p>3D-kartet trenger WebGL og nett. Rute, oppgaver og poeng virker uansett.</p></div>';
+    return;
+  }
+  updatePadding();
+  engine.overview({ intro: true, onDone: setControlState });
+  renderControls();
+}
+
+function preferredEngine() {
+  if (prefs.engine === 'map') return 'map';
+  return googleKey() ? 'earth' : 'map';
+}
+
+function onUserMove() {
+  if (walk && walk.playing) { walk.playing = false; walk.looking = true; renderWalkHud(); }
+  if (live && live.follow) { live.follow = false; renderLiveHud(); }
+  setControlState();
+}
+
+function updatePadding() {
+  if (!engine) return;
+  if (desktopMQ.matches) engine.setPadding({ top: 70, bottom: 30, left: $('#sheet').offsetWidth + 32, right: 70 });
+  else {
+    const peekH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--peek-h')) || 200;
+    engine.setPadding({ top: 70, bottom: peekH + 10, left: 10, right: 60 });
+  }
 }
 
 /* ---------- Gåtur i 3D ---------- */
 let walk = null;
 let speedIdx = 1;
 
-function startWalk(legIndex) {
-  if (!map) return toast('3D-kartet er ikke tilgjengelig her.');
+function startWalk(pos) {
+  if (!engine) return toast('3D-kartet er ikke klart ennå.');
   stopModes();
   peekBar = null;
-  const leg = legs[legIndex];
+  const leg = legs[pos];
+  if (!leg) return;
   walk = {
-    legIndex, coords: leg.coords, cum: leg.cum, total: leg.cum[leg.cum.length - 1],
+    pos, coords: leg.coords, cum: leg.cum, total: leg.cum[leg.cum.length - 1],
     d: 0, playing: true, looking: false, last: performance.now(),
     bearing: bearingBetween(leg.coords[0], pointAlong(leg.coords, leg.cum, 40)),
   };
-  if (!walker) {
-    const el = document.createElement('div');
-    el.className = 'walker';
-    walker = new maplibregl.Marker({ element: el });
-  }
-  walker.setLngLat(leg.coords[0]).addTo(map);
+  engine.setWalker(leg.coords[0]);
   setSheet('peek');
   $('#sheet').dataset.mode = 'walk';
   $('#peek').hidden = true;
@@ -554,13 +265,11 @@ function startWalk(legIndex) {
   $('#walk-hud').hidden = false;
   renderWalkHud();
   measurePeek();
-  map.stop();
-  map.once('moveend', () => {
+  engine.walkBegin(leg.coords[0], walk.bearing, prefs.cam).then(() => {
     if (!walk) return;
     walk.last = performance.now();
     walk.raf = requestAnimationFrame(walkFrame);
   });
-  map.flyTo({ center: leg.coords[0], zoom: 18.3, pitch: 74, bearing: walk.bearing, duration: reduceMotion ? 0 : 1800, essential: true });
   setControlState();
 }
 
@@ -573,8 +282,8 @@ function walkFrame(now) {
     const p = pointAlong(walk.coords, walk.cum, walk.d);
     const ahead = pointAlong(walk.coords, walk.cum, Math.min(walk.total, walk.d + 30));
     if (walk.total - walk.d > 4) walk.bearing = smoothAngle(walk.bearing, bearingBetween(p, ahead), 1 - Math.exp(-dt * 2.6));
-    map.jumpTo({ center: p, bearing: walk.bearing, pitch: 74, zoom: 18.3 });
-    walker.setLngLat(p);
+    engine.walkCamera(p, walk.bearing, prefs.cam);
+    engine.setWalker(p);
     if (Math.floor(now / 120) !== walk.hudTick) { walk.hudTick = Math.floor(now / 120); renderWalkHud(); }
     if (walk.d >= walk.total) return finishWalk();
   }
@@ -582,27 +291,29 @@ function walkFrame(now) {
 }
 
 function finishWalk() {
-  const target = walk.legIndex;
-  const bearing = walk.bearing;
+  const { pos, bearing } = walk;
   exitWalk(false);
-  if (target >= BARS.length) {
-    flyTo(HOTEL.coord, { bearing: bearing + 70, zoom: 17.8, pitch: 64, duration: reduceMotion ? 0 : 3500 });
+  const { seq } = ctx();
+  if (pos >= seq.length) {
+    engine.flyTo(HOTEL.coord, { bearing: bearing + 70, close: true, slow: true });
     toast('Fremme ved Imperial Hotel. God natt!');
     return;
   }
-  const bar = BARS[target];
-  flyTo(bar.coord, { bearing: bearing + 80, zoom: 17.9, pitch: 64, duration: reduceMotion ? 0 : 3800 });
-  state.selected = target;
-  save();
+  const b = seq[pos];
+  engine.flyTo(BARS[b].coord, { bearing: bearing + 80, close: true, slow: true });
+  prefs.selected = b;
+  savePrefs();
   render();
-  toast(`Fremme ved ${bar.name}`, state.here === target ? null : { label: 'Sjekk inn', action: 'checkin', i: target });
+  const team = myTeam();
+  const here = team && S().progress[team.id]?.here === b;
+  toast(`Fremme ved ${BARS[b].name}`, here || !team ? null : { label: 'Sjekk inn', action: 'checkin', i: b });
 }
 
-function exitWalk(reset = true) {
+function exitWalk(relax = true) {
   if (!walk) return;
   cancelAnimationFrame(walk.raf);
   walk = null;
-  walker?.remove();
+  engine?.setWalker(null);
   delete $('#walk-hud').dataset.leg;
   delete $('#walk-hud').dataset.mode;
   delete $('#sheet').dataset.mode;
@@ -610,7 +321,7 @@ function exitWalk(reset = true) {
   $('#tabs').hidden = false;
   $('#walk-hud').hidden = true;
   measurePeek();
-  if (reset) map.easeTo({ pitch: 60, zoom: 17, duration: 800 });
+  if (relax) engine?.relax();
   setControlState();
 }
 
@@ -618,9 +329,10 @@ function exitWalk(reset = true) {
 function renderWalkHud() {
   if (!walk) return;
   const hud = $('#walk-hud');
-  if (hud.dataset.leg !== String(walk.legIndex)) {
-    const to = walk.legIndex >= BARS.length ? HOTEL.name : BARS[walk.legIndex].name;
-    hud.dataset.leg = walk.legIndex;
+  if (hud.dataset.leg !== String(walk.pos)) {
+    const { seq } = ctx();
+    const to = walk.pos >= seq.length ? HOTEL.name : BARS[seq[walk.pos]].name;
+    hud.dataset.leg = walk.pos;
     hud.innerHTML = `
       <div class="walk-top">
         <span class="walk-title">Gåtur til ${esc(to)}</span>
@@ -630,6 +342,7 @@ function renderWalkHud() {
       <div class="walk-controls">
         <button class="btn btn-primary" type="button" data-action="walk-toggle" id="walk-toggle"></button>
         <button class="btn" type="button" data-action="walk-speed" id="walk-speed"></button>
+        <button class="btn" type="button" data-action="cam-toggle" id="walk-cam"></button>
         <button class="btn btn-ghost" type="button" data-action="walk-exit" aria-label="Avslutt gåturen">${icon('close')}</button>
       </div>
       <div class="walk-hint" id="walk-hint"></div>`;
@@ -637,12 +350,13 @@ function renderWalkHud() {
   const left = walk.total - walk.d;
   $('#walk-left').textContent = `${fmtDist(left)} · ${fmtMin(left / WALK_SPEED)}`;
   $('#walk-progress').style.width = `${(walk.total ? (walk.d / walk.total) * 100 : 100).toFixed(1)}%`;
-  const mode = `${walk.playing}|${walk.looking}|${speedIdx}`;
+  const mode = `${walk.playing}|${walk.looking}|${speedIdx}|${prefs.cam}`;
   if (hud.dataset.mode !== mode) {
     hud.dataset.mode = mode;
     $('#walk-toggle').innerHTML = walk.playing ? `${icon('pause')} Pause` : `${icon('play')} ${walk.looking ? 'Gå videre' : 'Fortsett'}`;
     $('#walk-speed').innerHTML = `${icon('walk')} ${WALK_SPEEDS[speedIdx].label}`;
-    $('#walk-hint').textContent = walk.looking ? 'Du ser deg rundt. Dra, vri og vipp kartet med to fingre.' : 'Dra i kartet for å stoppe og se deg rundt.';
+    $('#walk-cam').innerHTML = prefs.cam === 'gate' ? `${icon('person')} Gate` : `${icon('drone')} Drone`;
+    $('#walk-hint').textContent = walk.looking ? 'Du ser deg rundt. Dra, vri og vipp med to fingre.' : 'Dra i bildet for å stoppe og se deg rundt.';
   }
 }
 
@@ -650,11 +364,10 @@ function renderWalkHud() {
 let live = null;
 
 async function startLive() {
-  if (!map) return toast('3D-kartet er ikke tilgjengelig her.');
+  if (!engine) return toast('3D-kartet er ikke klart ennå.');
   if (!('geolocation' in navigator)) return toast('Nettleseren støtter ikke posisjon.');
   stopModes();
-  live = { follow: true, pos: null, acc: null, compass: null, course: null, cam: null, bearing: map.getBearing(), arrived: new Set(), last: performance.now() };
-
+  live = { follow: true, pos: null, acc: null, compass: null, course: null, cam: null, bearing: engine.bearing(), arrived: new Set(), last: performance.now() };
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     try { await DeviceOrientationEvent.requestPermission(); } catch { /* kompass avslått, GPS-kurs brukes */ }
   }
@@ -663,13 +376,6 @@ async function startLive() {
   window.addEventListener('deviceorientation', onOrient, true);
   live.watch = navigator.geolocation.watchPosition(onPos, onPosError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   try { live.wake = await navigator.wakeLock?.request('screen'); } catch { /* valgfritt */ }
-
-  if (!meMarker) {
-    const el = document.createElement('div');
-    el.className = 'me no-heading';
-    el.innerHTML = '<div class="me-cone"></div><div class="me-dot"></div>';
-    meMarker = new maplibregl.Marker({ element: el, rotationAlignment: 'map', pitchAlignment: 'map' });
-  }
   $('#live-hud').hidden = false;
   renderLiveHud();
   live.raf = requestAnimationFrame(liveFrame);
@@ -692,25 +398,22 @@ function onPos(p) {
   live.pos = [p.coords.longitude, p.coords.latitude];
   live.acc = p.coords.accuracy;
   if (typeof p.coords.heading === 'number' && !Number.isNaN(p.coords.heading) && (p.coords.speed || 0) > 0.6) live.course = p.coords.heading;
-  meMarker.setLngLat(live.pos);
   if (first) {
-    meMarker.addTo(map);
     live.cam = live.pos;
     if (haversine(live.pos, HOTEL.coord) > 15000) toast('Du er ikke i nærheten av ruta, men live-visningen følger deg likevel.');
   }
-  const ni = nextIndex();
-  if (ni < BARS.length && !live.arrived.has(ni) && haversine(live.pos, BARS[ni].coord) < ARRIVE_RADIUS) {
-    live.arrived.add(ni);
-    toast(`Dere er ved ${BARS[ni].name}!`, { label: 'Sjekk inn', action: 'checkin', i: ni });
+  const { nextBar } = ctx();
+  if (nextBar >= 0 && myTeam() && !live.arrived.has(nextBar) && haversine(live.pos, BARS[nextBar].coord) < ARRIVE_RADIUS) {
+    live.arrived.add(nextBar);
+    toast(`Dere er ved ${BARS[nextBar].name}!`, { label: 'Sjekk inn', action: 'checkin', i: nextBar });
   }
   renderLiveHud();
 }
 
 function onPosError(err) {
-  const msg = err.code === 1
+  toast(err.code === 1
     ? 'Posisjon er blokkert. Gi nettleseren tilgang til posisjon i innstillingene.'
-    : 'Fant ikke posisjonen din ennå. Gå gjerne ut under åpen himmel.';
-  toast(msg);
+    : 'Fant ikke posisjonen din ennå. Gå gjerne ut under åpen himmel.');
   if (err.code === 1) exitLive();
 }
 
@@ -723,12 +426,9 @@ function liveFrame(now) {
     const k = 1 - Math.exp(-dt * 4);
     live.cam = [live.cam[0] + (live.pos[0] - live.cam[0]) * k, live.cam[1] + (live.pos[1] - live.cam[1]) * k];
     if (heading != null) live.bearing = smoothAngle(live.bearing, heading, 1 - Math.exp(-dt * 5));
-    map.jumpTo({ center: live.cam, bearing: live.bearing, pitch: 68, zoom: 18.1 });
+    engine.liveCamera(live.cam, live.bearing, prefs.cam);
   }
-  if (meMarker) {
-    meMarker.getElement().classList.toggle('no-heading', heading == null);
-    if (heading != null) meMarker.setRotation(heading);
-  }
+  if (live.pos) engine.setMe(live.pos, heading);
   if (Math.floor(now / 250) !== live.tick) { live.tick = Math.floor(now / 250); renderLiveHud(); }
   live.raf = requestAnimationFrame(liveFrame);
 }
@@ -746,22 +446,24 @@ function renderLiveHud() {
         <span class="live-meta" id="live-meta"></span>
       </div>
       <button class="btn btn-sm btn-primary" type="button" data-action="live-follow" id="live-follow" hidden>${icon('gps')} Følg meg</button>
+      <button class="icon-btn" type="button" data-action="cam-toggle" id="live-cam" aria-label="Bytt kamerahøyde"></button>
       <button class="icon-btn" type="button" data-action="live-exit" aria-label="Avslutt live-visning">${icon('close')}</button>`;
   }
-  const ni = nextIndex();
-  const target = stopCoord(ni);
+  const { nextBar } = ctx();
+  const target = nextBar >= 0 ? BARS[nextBar].coord : HOTEL.coord;
   let dist = '–';
   let arrow = 0;
   let meta = 'Venter på GPS …';
   if (live.pos) {
     dist = fmtDist(haversine(live.pos, target));
-    arrow = bearingBetween(live.pos, target) - (map ? map.getBearing() : 0);
+    arrow = bearingBetween(live.pos, target) - (engine ? engine.bearing() : 0);
     meta = `±${Math.round(live.acc || 0)} m · ${live.compass != null ? 'kompass på' : live.course != null ? 'retning fra GPS' : 'uten kompass'}`;
   }
-  $('#live-to').textContent = `Til ${stopName(ni)}`;
+  $('#live-to').textContent = `Til ${nextBar >= 0 ? BARS[nextBar].name : HOTEL.name}`;
   $('#live-dist').textContent = dist;
   $('#live-meta').textContent = meta;
   $('#live-follow').hidden = live.follow;
+  $('#live-cam').innerHTML = icon(prefs.cam === 'gate' ? 'person' : 'drone');
   $('#live-arrow .ic').style.transform = `rotate(${arrow}deg)`;
 }
 
@@ -773,79 +475,81 @@ function exitLive() {
   window.removeEventListener('deviceorientation', onOrient, true);
   live.wake?.release?.().catch(() => {});
   live = null;
-  meMarker?.remove();
+  engine?.setMe(null);
   $('#live-hud').hidden = true;
   delete $('#live-hud').dataset.built;
   setControlState();
 }
 
 function stopModes() {
-  stopOrbit();
+  engine?.stopOrbit();
   exitWalk(false);
   exitLive();
 }
 
 /* ---------- Handlinger ---------- */
-let peekBar = null;
+const by = () => myTeam()?.id;
 
 function selectBar(i) {
-  state.selected = i;
+  prefs.selected = i;
   peekBar = null;
-  save();
+  savePrefs();
   tab = 'bar';
-  render();
+  render(true);
   setSheet('open');
 }
 
 function focusBar(i) {
   if (walk || live) return selectBar(i);
-  state.selected = i;
-  peekBar = i === nextIndex() ? null : i;
-  save();
+  prefs.selected = i;
+  peekBar = i === ctx().nextBar ? null : i;
+  savePrefs();
   tab = 'bar';
-  render();
+  render(true);
   setSheet('peek');
   stopModes();
-  flyTo(BARS[i].coord);
+  engine?.flyTo(BARS[i].coord);
 }
 
 function checkIn(i) {
+  const team = myTeam();
+  if (!team) return askTeam();
   peekBar = null;
-  state.here = i;
-  if (!state.visited.includes(BARS[i].id)) state.visited.push(BARS[i].id);
-  state.selected = i;
-  save();
+  store.dispatch([{ o: 'here', tm: team.id, v: i }, { o: 'vis', tm: team.id, bar: BARS[i].id, on: true }], team.id);
+  prefs.selected = i;
+  savePrefs();
   tab = 'bar';
-  refreshMapData();
-  render();
-  toast(i === BARS.length - 1 ? `Sjekket inn på ${BARS[i].name}, siste stopp!` : `Sjekket inn på ${BARS[i].name}. Skål!`);
+  render(true);
+  toast(i === finaleIdx() ? `${team.name} er fremme på finalen. Skål!` : `${team.name} sjekket inn på ${BARS[i].name}. Skål!`);
 }
 
 function toggleAward(barId, taskId, teamId) {
-  const a = (state.awards[barId] ||= {});
-  const list = (a[taskId] ||= []);
-  const idx = list.indexOf(teamId);
-  if (idx >= 0) list.splice(idx, 1); else list.push(teamId);
-  save();
-  render();
+  const on = (S().awards[barId]?.[taskId] || []).includes(teamId);
+  store.dispatch([{ o: 'aw', bar: barId, tk: taskId, tm: teamId, on: !on }], by());
 }
 
-function adjust(barId, teamId, delta) {
-  const a = (state.adjust[barId] ||= {});
-  a[teamId] = (a[teamId] || 0) + delta;
-  save();
-  render();
+function teamEvent(t, changes = {}) {
+  const x = { ...t, ...changes };
+  return { o: 'tm', id: x.id, n: x.name, col: x.color, x: x.x, ...(x.del ? { del: true } : {}) };
+}
+function memberEvent(m, teamId, changes = {}) {
+  return { o: 'mb', id: m.id, n: m.name, tm: teamId, c0: m.created, ...changes };
+}
+
+function lockRoutes(finaleId = S().finale) {
+  const fresh = planRoutes(S().teams, barIndex(finaleId), S().startTime, {});
+  return S().teams.map((t) => ({ o: 'rt', tm: t.id, ord: fresh[t.id] }));
 }
 
 function allParticipants() {
   const people = [];
-  state.teams.forEach((t) => t.members.forEach((m) => people.push({ name: m, team: t })));
+  S().teams.forEach((t) => t.members.forEach((m) => people.push({ name: m.name, team: t })));
   return people;
 }
 
 function pickRandom() {
   const people = allParticipants();
-  const pool = people.length ? people : state.teams.map((t) => ({ name: t.name, team: t }));
+  const pool = people.length ? people : S().teams.map((t) => ({ name: t.name, team: t }));
   if (!pool.length) return;
   const modal = $('#modal');
   modal.hidden = false;
@@ -859,33 +563,51 @@ function pickRandom() {
         <button class="btn btn-primary" type="button" data-action="modal-close">Ferdig</button>
       </div>
     </div>`;
-  const nameEl = $('#pick-name');
-  const teamEl = $('#pick-team');
   const final = pool[Math.floor(Math.random() * pool.length)];
   let n = 0;
   const total = reduceMotion ? 0 : 14;
   const tick = () => {
     const p = n < total ? pool[Math.floor(Math.random() * pool.length)] : final;
-    nameEl.textContent = p.name;
-    teamEl.innerHTML = people.length ? `<span class="swatch" style="--team:${p.team.color}"></span>${esc(p.team.name)}` : '';
+    $('#pick-name').textContent = p.name;
+    $('#pick-team').innerHTML = people.length ? `<span class="swatch" style="--team:${p.team.color}"></span>${esc(p.team.name)}` : '';
     if (n++ < total) setTimeout(tick, 50 + n * 9);
   };
   tick();
 }
 
-function scoreText() {
-  const done = state.visited.length;
-  const lines = ranking().map((t, i) => `${i + 1}. ${t.name}: ${t.score} p`);
-  const ni = nextIndex();
-  const next = ni < BARS.length ? `Neste: ${BARS[ni].name} (${CATEGORIES[BARS[ni].cat].label})` : 'Runden er ferdig. Hjem til Imperial Hotel!';
-  return `Kbh Bar til bar: stilling etter ${done} av ${BARS.length} barer\n${lines.join('\n')}\n${next}`;
+function askTeam() {
+  if (!S().teams.length) return;
+  const modal = $('#modal');
+  modal.hidden = false;
+  modal.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="team-q">
+      <p class="eyebrow">Denne telefonen</p>
+      <h2 class="h-display" id="team-q">Hvilket lag er du på?</h2>
+      <p class="muted small" style="margin:0">Laget bestemmer hvilken rute du ser. Poengene ser alle.</p>
+      <div class="team-pick">
+        ${S().teams.map((t) => `<button class="btn team-pick-btn" type="button" style="--team:${t.color}" data-action="set-my-team" data-team="${t.id}"><span class="swatch" style="--team:${t.color}"></span><span>${esc(t.name)}</span><span class="muted small">${t.members.map((m) => esc(m.name)).join(', ')}</span></button>`).join('')}
+      </div>
+      <button class="btn btn-ghost" type="button" data-action="modal-close">Bare se på</button>
+    </div>`;
 }
 
-async function shareScore() {
-  const text = scoreText();
+function maybeAskTeam() {
+  if (S().setupDone && !myTeam() && $('#modal').hidden) askTeam();
+}
+
+function scoreText() {
+  const lines = ranking().map((t, i) => `${i + 1}. ${t.name}: ${t.score} p`);
+  const where = S().teams.map((t) => {
+    const h = S().progress[t.id]?.here;
+    return `${t.name}: ${Number.isInteger(h) && h >= 0 ? BARS[h].name : 'ikke startet'}`;
+  });
+  return `Kbh Bar til bar: stillingen nå\n${lines.join('\n')}\n\nHvor er lagene?\n${where.join('\n')}\nFinale: ${BARS[finaleIdx()].name}`;
+}
+
+async function shareText(title, text, fallbackTitle) {
   try {
     if (navigator.share) {
-      await navigator.share({ title: 'Kbh Bar til bar', text });
+      await navigator.share({ title, text });
       return;
     }
   } catch (err) {
@@ -893,10 +615,18 @@ async function shareScore() {
   }
   try {
     await navigator.clipboard.writeText(text);
-    toast('Stillingen er kopiert. Lim den inn i gruppechatten.');
+    toast('Kopiert. Lim det inn i gruppechatten.');
   } catch {
-    showTextModal('Kopier stillingen', text);
+    showTextModal(fallbackTitle, text);
   }
+}
+
+function inviteLink() {
+  const u = new URL(location.href);
+  u.search = '';
+  u.hash = '';
+  if (room && room !== CONFIG.sync?.room) u.searchParams.set('rom', room);
+  return u.toString();
 }
 
 function showTextModal(title, text) {
@@ -908,31 +638,28 @@ function showTextModal(title, text) {
       <textarea class="input" id="share-text" readonly>${esc(text)}</textarea>
       <div class="modal-actions"><button class="btn btn-primary" type="button" data-action="modal-close">Lukk</button></div>
     </div>`;
-  const ta = $('#share-text');
-  ta.focus();
-  ta.select();
+  $('#share-text').focus();
+  $('#share-text').select();
 }
 
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast('Adressen er kopiert');
+    toast('Kopiert');
   } catch {
-    showTextModal('Adresse', text);
+    showTextModal('Kopier', text);
   }
 }
 
 function shuffleTeams() {
-  const people = allParticipants().map((p) => p.name);
+  const people = [];
+  S().teams.forEach((t) => t.members.forEach((m) => people.push(m)));
   if (people.length < 2) return toast('Legg til deltakere først.');
   for (let i = people.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [people[i], people[j]] = [people[j], people[i]];
   }
-  state.teams.forEach((t) => { t.members = []; });
-  people.forEach((p, i) => state.teams[i % state.teams.length].members.push(p));
-  save();
-  render();
+  store.dispatch(people.map((m, i) => memberEvent(m, S().teams[i % S().teams.length].id)), by());
   toast('Lagene er blandet');
 }
 
@@ -940,11 +667,34 @@ function addMember(teamId) {
   const input = document.getElementById(`member-${teamId}`);
   const name = input?.value.trim();
   if (!name) return;
-  const team = state.teams.find((t) => t.id === teamId);
-  team.members.push(name.slice(0, 40));
-  save();
-  render();
+  store.dispatch([{ o: 'mb', id: uid('m'), n: name.slice(0, 40), tm: teamId, c0: Date.now() }], by());
+  render(true);
   document.getElementById(`member-${teamId}`)?.focus();
+}
+
+/* ---------- Sanntidsvarsler ---------- */
+function describe(e) {
+  const team = teamById(e.tm)?.name || 'Et lag';
+  const bar = BARS.find((b) => b.id === e.bar);
+  switch (e.o) {
+    case 'aw': {
+      const task = bar && [...bar.tasks, ...FINALE_TASKS].find((t) => t.id === e.tk);
+      if (!task) return null;
+      return e.on ? `${team} fikk ${task.points} p for «${task.title}»` : `${team} mistet ${task.points} p for «${task.title}»`;
+    }
+    case 'adj': return `${team} ${e.d > 0 ? 'fikk' : 'mistet'} ${Math.abs(e.d)} dommerpoeng${bar ? ` på ${bar.name}` : ''}`;
+    case 'here': return Number.isInteger(e.v) && BARS[e.v] ? `${team} sjekket inn på ${BARS[e.v].name}` : null;
+    case 'go': return e.v ? 'Kvelden er i gang!' : null;
+    case 'fin': return `Finalen er flyttet til ${BARS.find((b) => b.id === e.v)?.name || 'en ny bar'}`;
+    case 'rst': return 'Kvelden ble nullstilt';
+    default: return null;
+  }
+}
+
+function announceRemote(list) {
+  const msgs = list.map(describe).filter(Boolean);
+  if (!msgs.length) return;
+  toast(msgs.length === 1 ? msgs[0] : `${msgs[msgs.length - 1]} (+${msgs.length - 1} til)`);
 }
 
 /* ---------- Toast ---------- */
@@ -954,7 +704,7 @@ function toast(message, action = null) {
   el.innerHTML = `<span>${esc(message)}</span>${action ? `<button class="btn btn-sm" type="button" data-action="${action.action}" data-i="${action.i ?? ''}">${esc(action.label)}</button>` : ''}`;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, action ? 9000 : 3800);
+  toastTimer = setTimeout(() => { el.hidden = true; }, action ? 9000 : 4200);
 }
 
 /* ---------- Bunnark ---------- */
@@ -975,9 +725,8 @@ function initSheetDrag() {
   let startY = null;
   let startT = 0;
   let moved = false;
-  const handles = [$('#sheet-grab'), $('#peek'), $('#walk-hud')];
   const onDown = (e) => {
-    if (desktopMQ.matches || e.target.closest('button, a, input')) return;
+    if (desktopMQ.matches || e.target.closest('button, a, input, select')) return;
     startY = e.clientY;
     moved = false;
     const tr = getComputedStyle(sheet).transform;
@@ -1002,7 +751,7 @@ function initSheetDrag() {
     else if (dy > 50) setSheet('peek');
     startY = null;
   };
-  handles.forEach((h) => {
+  [$('#sheet-grab'), $('#peek'), $('#walk-hud')].forEach((h) => {
     h.addEventListener('pointerdown', onDown);
     h.addEventListener('pointermove', onMove);
     h.addEventListener('pointerup', onUp);
@@ -1021,102 +770,135 @@ function catChip(cat) {
   const c = CATEGORIES[cat];
   return `<span class="chip" style="--c:${c.color}">${icon(c.icon)}${esc(c.label)}</span>`;
 }
-function barStatus(i) {
-  if (i === state.here) return '<span class="status is-here">Her nå</span>';
-  if (state.visited.includes(BARS[i].id)) return '<span class="status is-done">Besøkt</span>';
-  if (i === nextIndex()) return '<span class="status is-next">Neste</span>';
+function barStatus(i, c = ctx()) {
+  if (i === c.here) return '<span class="status is-here">Her nå</span>';
+  if (c.visited.has(BARS[i].id)) return '<span class="status is-done">Besøkt</span>';
+  if (i === c.nextBar) return '<span class="status is-next">Neste</span>';
+  if (i === finaleIdx()) return '<span class="status is-finale">Finale</span>';
   return '';
 }
 const streetViewUrl = (c) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${c[1]},${c[0]}`;
 const directionsUrl = (bar) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${bar.name}, ${bar.address}`)}&travelmode=walking`;
+const SYNC_TEXT = { live: 'Sanntid', connecting: 'Kobler til', reconnecting: 'Kobler til igjen', offline: 'Frakoblet', local: 'Bare denne telefonen' };
+const shortName = (name) => name.replace(/^Den /, '').replace(/ Vinstue$/, '').replace(/ 10$/, '');
 
-function render() {
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+let bodyDirty = false;
+function render(force = false) {
+  ensureLegs();
   renderTop();
   renderControls();
   renderPeek();
   renderTabs();
-  renderBody();
-  updateMarkers();
+  // Ikke tegn om skjemaet mens noen skriver i det; det tegnes når feltet mister fokus.
+  const active = document.activeElement;
+  const typing = active?.closest?.('#sheet-body') && active.matches('input, textarea, select');
+  if (typing && !force) bodyDirty = true;
+  else { bodyDirty = false; renderBody(); }
+  engine?.setView(viewState());
   requestAnimationFrame(measurePeek);
 }
 
 function renderTop() {
-  $('#progress').textContent = `${state.visited.length}/${BARS.length}`;
-  $('#progress').setAttribute('aria-label', `${state.visited.length} av ${BARS.length} barer besøkt`);
-  const lead = ranking()[0];
-  const anyPoints = ranking().some((t) => t.score !== 0);
-  $('#leader-chip').innerHTML = lead
-    ? `${icon('trophy')}<span class="leader-name">${anyPoints ? esc(lead.name) : 'Poeng'}</span><span class="leader-pts">${anyPoints ? lead.score : '0'}</span>`
-    : `${icon('trophy')}<span class="leader-name">Poeng</span>`;
+  const c = ctx();
+  const status = store.status;
+  $('#progress').innerHTML = `<span class="sync-dot is-${status}"></span>${c.visited.size}/${BARS.length}`;
+  $('#progress').setAttribute('aria-label', `${SYNC_TEXT[status]}. ${c.visited.size} av ${BARS.length} barer besøkt`);
+  $('#progress').title = SYNC_TEXT[status] || '';
+  const ranked = ranking();
+  const lead = ranked[0];
+  const anyPoints = ranked.some((t) => t.score !== 0);
+  $('#leader-chip').innerHTML = `${icon('trophy')}<span class="leader-name">${anyPoints && lead ? esc(lead.name) : 'Poeng'}</span><span class="leader-pts">${anyPoints && lead ? lead.score : 0}</span>`;
 }
 
 function renderControls() {
+  const hasKey = !!googleKey();
   $('#map-controls').innerHTML = `
-    <button id="btn-overview" class="ctl" type="button" data-action="overview" aria-label="Se hele ruta i 3D" title="Hele ruta i 3D" aria-pressed="${orbit ? 'true' : 'false'}">${icon('overview')}</button>
-    <button id="btn-live" class="ctl" type="button" data-action="live" aria-label="Live-posisjon med kompass" title="Live: GPS og kompass" aria-pressed="${live ? 'true' : 'false'}">${icon('gps')}</button>
-    <button id="btn-daynight" class="ctl" type="button" data-action="daynight" aria-label="${isNight() ? 'Bytt til dagkart' : 'Bytt til nattkart'}" title="Dag/natt">${icon(isNight() ? 'sun' : 'moon')}</button>
+    <button id="btn-overview" class="ctl" type="button" data-action="overview" aria-label="Se hele ruta i 3D" title="Hele ruta i 3D">${icon('overview')}</button>
+    <button id="btn-live" class="ctl" type="button" data-action="live" aria-label="Live-posisjon med kompass" title="Live: GPS og kompass">${icon('gps')}</button>
+    ${hasKey ? `<button id="btn-engine" class="ctl" type="button" data-action="engine-toggle" aria-label="${engineKind === 'earth' ? 'Bytt til kart' : 'Bytt til Google 3D'}" title="Google 3D eller kart" aria-pressed="${engineKind === 'earth'}">${icon('globe')}</button>` : ''}
+    <button id="btn-daynight" class="ctl" type="button" data-action="daynight" aria-label="${isNight() ? 'Bytt til dag' : 'Bytt til natt'}" title="Dag/natt">${icon(isNight() ? 'sun' : 'moon')}</button>
     <button id="btn-north" class="ctl" type="button" data-action="north" aria-label="Snu kartet med nord opp" title="Nord opp">${icon('north')}</button>`;
   const n = document.querySelector('#btn-north .north-needle');
-  if (n && map) { n.style.transformOrigin = '12px 12px'; n.style.transform = `rotate(${-map.getBearing()}deg)`; }
+  if (n) { n.style.transformOrigin = '12px 12px'; n.style.transform = `rotate(${-(engine?.bearing() || 0)}deg)`; }
+  setControlState();
 }
 function setControlState() {
-  $('#btn-overview')?.setAttribute('aria-pressed', orbit ? 'true' : 'false');
+  $('#btn-overview')?.setAttribute('aria-pressed', engine?.orbiting ? 'true' : 'false');
   $('#btn-live')?.setAttribute('aria-pressed', live ? 'true' : 'false');
 }
 
 function renderPeek() {
-  const sched = schedule();
-  const ni = nextIndex();
+  const c = ctx();
+  const sched = schedule(c.seq);
   let html;
-  if (ni >= BARS.length) {
+  if (S().setupDone && !c.team) {
+    html = `
+      <div class="peek-card">
+        <div class="badge" style="--c:var(--sodium)">${icon('users')}</div>
+        <div class="peek-text">
+          <div class="eyebrow">${S().teams.length} lag er med</div>
+          <h2 class="peek-title">Hvilket lag er du på?</h2>
+          <div class="peek-meta">Velg laget ditt for å se ruta deres</div>
+        </div>
+        <div class="peek-actions"><button class="btn btn-primary" type="button" data-action="ask-team">${icon('users')} Velg lag</button></div>
+      </div>`;
+  } else if (peekBar != null) {
+    const bar = BARS[peekBar];
+    const cat = CATEGORIES[bar.cat];
+    const pos = c.seq.indexOf(peekBar);
+    html = `
+      <div class="peek-card">
+        <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${pos + 1}</span></div>
+        <div class="peek-text">
+          <div class="eyebrow">Stopp ${pos + 1} · ca. ${fmtClock(sched.arrive[pos])}</div>
+          <h2 class="peek-title">${esc(bar.name)}</h2>
+          <div class="peek-meta">${esc(cat.label)} · ${esc(bar.address)}</div>
+        </div>
+        <div class="peek-actions">
+          <button class="btn btn-primary" type="button" data-action="select-bar" data-i="${peekBar}">Se baren</button>
+          <button class="btn" type="button" data-action="walk" data-leg="${pos}">${icon('walk')} Gåtur hit</button>
+          <button class="btn btn-ghost" type="button" data-action="peek-clear" aria-label="Tilbake til neste stopp">${icon('close')}</button>
+        </div>
+      </div>`;
+  } else if (c.nextBar < 0) {
     const lead = ranking()[0];
     html = `
       <div class="peek-card">
         <div class="badge" style="--c:var(--sodium)">${icon('trophy')}</div>
         <div class="peek-text">
           <div class="eyebrow">Runden er ferdig</div>
-          <h2 class="peek-title">${lead ? `${esc(lead.name)} vant!` : 'Godt jobba!'}</h2>
-          <div class="peek-meta">Hjem til ${esc(HOTEL.name)} · ${fmtDist(legs[BARS.length].distance)} · ${fmtMin(legs[BARS.length].duration)}</div>
+          <h2 class="peek-title">${lead ? `${esc(lead.name)} leder!` : 'Godt jobba!'}</h2>
+          <div class="peek-meta">Hjem til ${esc(HOTEL.name)} · ${fmtDist(legs[c.seq.length]?.distance || 0)}</div>
         </div>
         <div class="peek-actions">
-          <button class="btn btn-primary" type="button" data-action="walk" data-leg="${BARS.length}">${icon('walk')} Gåtur hjem</button>
+          <button class="btn btn-primary" type="button" data-action="walk" data-leg="${c.seq.length}">${icon('walk')} Gåtur hjem</button>
           <button class="btn" type="button" data-action="tab" data-tab="score">${icon('trophy')} Poeng</button>
         </div>
       </div>`;
-  } else if (peekBar != null) {
-    const bar = BARS[peekBar];
-    const cat = CATEGORIES[bar.cat];
-    html = `
-      <div class="peek-card">
-        <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${peekBar + 1}</span></div>
-        <div class="peek-text">
-          <div class="eyebrow">Stopp ${peekBar + 1} · ca. ${fmtClock(sched.arrive[peekBar])}</div>
-          <h2 class="peek-title">${esc(bar.name)}</h2>
-          <div class="peek-meta">${esc(cat.label)} · ${esc(bar.address)}</div>
-        </div>
-        <div class="peek-actions">
-          <button class="btn btn-primary" type="button" data-action="select-bar" data-i="${peekBar}">Se baren</button>
-          <button class="btn" type="button" data-action="walk" data-leg="${peekBar}">${icon('walk')} Gåtur hit</button>
-          <button class="btn btn-ghost" type="button" data-action="peek-clear" aria-label="Tilbake til neste stopp">${icon('close')}</button>
-        </div>
-      </div>`;
   } else {
-    const bar = BARS[ni];
+    const bar = BARS[c.nextBar];
     const cat = CATEGORIES[bar.cat];
-    const leg = legs[ni];
-    const from = state.here < 0 ? 'Start fra hotellet' : `Fra ${BARS[state.here].name}`;
+    const leg = legs[c.nextPos];
+    const isFinale = c.nextBar === finaleIdx();
     html = `
       <div class="peek-card">
-        <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${ni + 1}</span></div>
+        <div class="badge" style="--c:${cat.color}">${icon(cat.icon)}<span class="badge-num">${c.nextPos + 1}</span></div>
         <div class="peek-text">
-          <div class="eyebrow">Neste stopp · <b>ca. ${fmtClock(sched.arrive[ni])}</b></div>
+          <div class="eyebrow">${c.team ? `${esc(c.team.name)} · ` : ''}${isFinale ? 'Finale' : 'Neste'} · <b>ca. ${fmtClock(sched.arrive[c.nextPos])}</b></div>
           <h2 class="peek-title">${esc(bar.name)}</h2>
-          <div class="peek-meta">${esc(cat.label)} · ${fmtDist(leg.distance)} · ${fmtMin(leg.duration)} å gå · ${esc(from)}</div>
+          <div class="peek-meta">${esc(cat.label)} · ${fmtDist(leg?.distance || 0)} · ${fmtMin(leg?.duration || 60)} å gå</div>
         </div>
         <div class="peek-actions">
-          <button class="btn btn-primary" type="button" data-action="walk" data-leg="${ni}">${icon('walk')} 3D-gåtur</button>
+          <button class="btn btn-primary" type="button" data-action="walk" data-leg="${c.nextPos}">${icon('walk')} 3D-gåtur</button>
           <button class="btn" type="button" data-action="live">${icon('gps')} Gå live</button>
-          <button class="btn" type="button" data-action="select-bar" data-i="${ni}">Oppgaver</button>
+          <button class="btn" type="button" data-action="select-bar" data-i="${c.nextBar}">Oppgaver</button>
         </div>
       </div>`;
   }
@@ -1141,41 +923,54 @@ function renderBody() {
 }
 
 function viewRoute() {
-  const sched = schedule();
+  const c = ctx();
+  const sched = schedule(c.seq);
   const totalDist = legs.reduce((s, l) => s + l.distance, 0);
-  const ni = nextIndex();
-  const legRow = (i) => {
-    const st = i < ni ? 'is-done' : i === ni ? 'is-next' : '';
+  const fi = finaleIdx();
+  const at = teamsAt();
+  const legRow = (pos) => {
+    const st = pos < c.nextPos ? 'is-done' : pos === c.nextPos ? 'is-next' : '';
     return `
       <li class="tl-leg">
         <span class="tl-leg-line ${st}"></span>
-        <span class="tl-leg-info">${fmtDist(legs[i].distance)} · ${fmtMin(legs[i].duration)} gange
-          <button type="button" data-action="walk" data-leg="${i}">${icon('walk')} Gå i 3D</button>
+        <span class="tl-leg-info">${fmtDist(legs[pos]?.distance || 0)} · ${fmtMin(legs[pos]?.duration || 60)} gange
+          <button type="button" data-action="walk" data-leg="${pos}">${icon('walk')} Gå i 3D</button>
         </span>
       </li>`;
   };
-  const stops = BARS.map((bar, i) => {
-    const c = CATEGORIES[bar.cat];
-    const done = state.visited.includes(bar.id);
+  const stops = c.seq.map((b, pos) => {
+    const bar = BARS[b];
+    const cat = CATEGORIES[bar.cat];
+    const others = (at.get(b) || []).filter((t) => t.id !== c.team?.id);
+    const status = barStatus(b, c);
     return `
-      ${legRow(i)}
+      ${legRow(pos)}
       <li class="tl-stop">
-        <span class="tl-dot ${done ? 'is-done' : ''}" style="--c:${c.color}">${i + 1}</span>
-        <button class="tl-main" type="button" data-action="select-bar" data-i="${i}">
+        <span class="tl-dot ${c.visited.has(bar.id) ? 'is-done' : ''}" style="--c:${cat.color}">${pos + 1}</span>
+        <button class="tl-main" type="button" data-action="select-bar" data-i="${b}">
           <span class="tl-name">${esc(bar.name)}</span>
-          <span class="tl-sub">${esc(c.label)} · ${esc(bar.tagline)}</span>
+          <span class="tl-sub">${esc(cat.label)} · ${others.length ? `${others.map((t) => esc(t.name)).join(', ')} er her nå` : esc(bar.tagline)}</span>
         </button>
-        <span class="tl-time">${barStatus(i) || `ca. ${fmtClock(sched.arrive[i])}`}</span>
+        <span class="tl-time">${status || `ca. ${fmtClock(sched.arrive[pos])}`}</span>
+      </li>`;
+  }).join('');
+  const allRoutes = S().teams.map((t) => {
+    const seq = plan()[t.id] || [];
+    const prog = S().progress[t.id] || { here: -1, visited: [] };
+    return `
+      <li class="${t.id === c.team?.id ? 'is-mine' : ''}">
+        <span class="routes-team"><span class="swatch" style="--team:${t.color}"></span>${esc(t.name)}</span>
+        <span class="routes-chips">${seq.map((b, k) => `<span class="route-chip ${prog.visited.includes(BARS[b].id) ? 'is-done' : ''} ${prog.here === b ? 'is-here' : ''}" style="--c:${CATEGORIES[BARS[b].cat].color}" title="${esc(BARS[b].name)}">${k + 1}. ${esc(shortName(BARS[b].name))}</span>`).join('')}</span>
       </li>`;
   }).join('');
   return `
     <div class="section">
-      <h2 class="h-display">Sju barer, én kveld</h2>
-      <p class="lede">Ruta starter og slutter ved Imperial Hotel og går gjennom Indre By og Latinerkvarteret. Trykk på en bar for detaljer, eller «Gå i 3D» for å se veien før dere går.</p>
+      <h2 class="h-display">${c.team ? `Ruta til ${esc(c.team.name)}` : 'Sju barer, én kveld'}</h2>
+      <p class="lede">Hvert lag har sin egen rekkefølge, men alle starter ved Imperial Hotel og møtes til finale på <b>${esc(BARS[fi].name)}</b>. Trykk på en bar for oppgaver, eller «Gå i 3D» for å se veien før dere går.</p>
     </div>
     <div class="stats">
       <div class="stat"><b>${fmtDist(totalDist)}</b><span>gange totalt</span></div>
-      <div class="stat"><b>${fmtClock(sched.home)}</b><span>hjemme ca.</span></div>
+      <div class="stat"><b>${fmtClock(sched.arrive[c.seq.length - 1] || 0)}</b><span>finale ca.</span></div>
       <div class="stat"><b>${BARS.length}</b><span>barer</span></div>
     </div>
     <ol class="timeline" aria-label="Ruta">
@@ -1185,34 +980,40 @@ function viewRoute() {
           <span class="tl-name">${esc(HOTEL.name)}</span>
           <span class="tl-sub">Start · ${esc(HOTEL.address)}</span>
         </button>
-        <span class="tl-time">${esc(state.startTime)}</span>
+        <span class="tl-time">${esc(S().startTime)}</span>
       </li>
       ${stops}
-      ${legRow(BARS.length)}
+      ${legRow(c.seq.length)}
       <li class="tl-stop">
         <span class="tl-dot" style="--c:var(--text)">${icon('hotel')}</span>
         <button class="tl-main" type="button" data-action="fly-hotel">
           <span class="tl-name">Hjem til hotellet</span>
-          <span class="tl-sub">Slutt · ${esc(HOTEL.address)}</span>
+          <span class="tl-sub">${esc(HOTEL.address)}</span>
         </button>
         <span class="tl-time">ca. ${fmtClock(sched.home)}</span>
       </li>
     </ol>
     <button class="btn btn-block" type="button" data-action="overview">${icon('overview')} Se hele ruta i 3D</button>
+    <section class="section">
+      <h3 class="section-title">Alle lagenes ruter</h3>
+      <ul class="routes-list">${allRoutes}</ul>
+    </section>
     <p class="note">${routeSource === 'osm'
-      ? 'Gangrutene er beregnet langs ekte gater fra OpenStreetMap.'
-      : 'Rutene er omtrentlige til appen får kontakt med rutetjenesten. Kartet og barene stemmer uansett.'}
-      Tidene regnes ut fra starttid og ca. ${BARS.reduce((s, b) => s + b.stay, 0) / BARS.length | 0} min per bar. Endre starttid under <b>Lag</b>.</p>`;
+      ? 'Gangrutene følger ekte gater fra OpenStreetMap.'
+      : 'Rutene er omtrentlige til appen får kontakt med rutetjenesten.'}
+      Tidene regnes ut fra starttid ${esc(S().startTime)} og tiden på hver bar. Endre starttid og finale under <b>Lag</b>.</p>`;
 }
 
 function viewBar() {
-  const i = state.selected ?? 0;
+  const c = ctx();
+  const i = prefs.selected ?? 0;
   const bar = BARS[i];
-  const cat = CATEGORIES[bar.cat];
-  const sched = schedule();
-  const teams = state.teams;
-  const awards = state.awards[bar.id] || {};
-  const tasks = bar.tasks.map((task) => {
+  const pos = c.seq.indexOf(i);
+  const sched = schedule(c.seq);
+  const teams = S().teams;
+  const awards = S().awards[bar.id] || {};
+  const isFinale = i === finaleIdx();
+  const taskList = (list) => list.map((task) => {
     const won = awards[task.id] || [];
     return `
       <li class="task">
@@ -1224,28 +1025,30 @@ function viewBar() {
         </div>
       </li>`;
   }).join('');
-  const adj = state.adjust[bar.id] || {};
-  const isHere = state.here === i;
-  const isNext = nextIndex() === i;
-  const nextBar = BARS[i + 1];
-  const primary = isHere
-    ? (nextBar
-      ? `<button class="btn btn-primary btn-block" type="button" data-action="walk" data-leg="${i + 1}">${icon('walk')} Videre til ${esc(nextBar.name)}</button>`
-      : `<button class="btn btn-primary btn-block" type="button" data-action="tab" data-tab="score">${icon('trophy')} Se kveldens vinner</button>`)
-    : `<button class="btn ${isNext ? 'btn-primary' : ''} btn-block" type="button" data-action="checkin" data-i="${i}">${icon('check')} Sjekk inn her</button>`;
+  const adj = S().adjust[bar.id] || {};
+  const nextB = c.seq[pos + 1];
+  let primary;
+  if (!c.team) primary = `<button class="btn btn-primary btn-block" type="button" data-action="ask-team">${icon('users')} Velg laget ditt</button>`;
+  else if (c.here === i) {
+    primary = nextB != null
+      ? `<button class="btn btn-primary btn-block" type="button" data-action="walk" data-leg="${pos + 1}">${icon('walk')} Videre til ${esc(BARS[nextB].name)}</button>`
+      : `<button class="btn btn-primary btn-block" type="button" data-action="tab" data-tab="score">${icon('trophy')} Se poengtavla</button>`;
+  } else primary = `<button class="btn ${i === c.nextBar ? 'btn-primary' : ''} btn-block" type="button" data-action="checkin" data-i="${i}">${icon('check')} Sjekk inn ${esc(c.team.name)} her</button>`;
+  const here = teamsAt().get(i) || [];
 
   return `
     <div class="bar-head">
-      <div class="bar-head-row">${catChip(bar.cat)} ${barStatus(i)} <span class="eyebrow">Stopp ${i + 1} av ${BARS.length} · ca. ${fmtClock(sched.arrive[i])}</span></div>
+      <div class="bar-head-row">${catChip(bar.cat)} ${barStatus(i, c)} <span class="eyebrow">Stopp ${pos + 1} av ${BARS.length} · ca. ${fmtClock(sched.arrive[pos])}</span></div>
       <h2 class="h-display">${esc(bar.name)}</h2>
       <div class="address">${icon('map')}<span>${esc(bar.address)}</span>
         <button class="icon-btn" type="button" data-action="copy" data-text="${esc(`${bar.name}, ${bar.address}`)}" aria-label="Kopier adressen">${icon('copy')}</button>
       </div>
+      ${here.length ? `<div class="row-wrap">${here.map((t) => `<span class="chip" style="--c:${t.color}"><span class="swatch" style="--team:${t.color}"></span>${esc(t.name)} er her</span>`).join('')}</div>` : ''}
       <p class="lede">${esc(bar.about)}</p>
     </div>
     ${primary}
     <div class="action-grid">
-      <button class="btn" type="button" data-action="walk" data-leg="${i}">${icon('walk')} 3D-gåtur hit</button>
+      <button class="btn" type="button" data-action="walk" data-leg="${pos}">${icon('walk')} 3D-gåtur hit</button>
       <button class="btn" type="button" data-action="fly-bar" data-i="${i}">${icon('overview')} Vis i 3D</button>
       <a class="btn" href="${streetViewUrl(bar.coord)}" target="_blank" rel="noopener">${icon('eye')} Street View</a>
       <a class="btn" href="${directionsUrl(bar)}" target="_blank" rel="noopener">${icon('nav')} Google Maps</a>
@@ -1256,11 +1059,17 @@ function viewBar() {
     </section>
     <section class="section">
       <h3 class="section-title">Oppgaver <button class="btn btn-sm" type="button" data-action="pick">${icon('dice')} Hvem må?</button></h3>
-      <ul class="tasks">${tasks}</ul>
+      <ul class="tasks">${taskList(bar.tasks)}</ul>
     </section>
+    ${isFinale ? `
+    <section class="section">
+      <h3 class="section-title">Finalen: lag mot lag</h3>
+      <p class="muted small" style="margin:0">Når alle lagene er på plass.</p>
+      <ul class="tasks">${taskList(FINALE_TASKS)}</ul>
+    </section>` : ''}
     <section class="section">
       <h3 class="section-title">Dommerpoeng</h3>
-      <p class="muted small" style="margin:0">Bonus eller straff fra dommeren, for eksempel for beste antrekk eller juks.</p>
+      <p class="muted small" style="margin:0">Bonus eller straff, for eksempel for beste antrekk eller juks.</p>
       <div class="adjust-list">
         ${teams.map((t) => `
           <div class="adjust-row">
@@ -1277,19 +1086,22 @@ function viewBar() {
 function viewScore() {
   const ranked = ranking();
   const max = Math.max(1, ...ranked.map((t) => t.score));
-  const finished = nextIndex() >= BARS.length;
+  const fi = finaleIdx();
+  const allAtFinale = S().teams.length > 0 && S().teams.every((t) => S().progress[t.id]?.here === fi);
   const lead = ranked[0];
   const tie = ranked.length > 1 && ranked[0].score === ranked[1].score;
   let prevScore = null;
   let rank = 0;
   const rows = ranked.map((t, idx) => {
     if (t.score !== prevScore) { rank = idx + 1; prevScore = t.score; }
+    const h = S().progress[t.id]?.here;
+    const where = Number.isInteger(h) && h >= 0 ? `På ${BARS[h].name} · ${(S().progress[t.id]?.visited || []).length}/${BARS.length}` : 'Ikke startet';
     return `
       <li class="board-row ${rank === 1 && t.score > 0 ? 'is-lead' : ''}" style="--team:${t.color};--w:${Math.max(0, (t.score / max) * 100).toFixed(1)}%">
         <span class="board-rank">${rank}</span>
         <span class="board-team">
           <span class="board-name"><span class="swatch" style="--team:${t.color}"></span><span>${esc(t.name)}</span></span>
-          <span class="board-members">${t.members.length ? esc(t.members.join(', ')) : 'Ingen deltakere lagt til'}</span>
+          <span class="board-members">${esc(where)}${t.members.length ? ` · ${t.members.map((m) => esc(m.name)).join(', ')}` : ''}</span>
         </span>
         <span class="board-pts">${t.score}<small>p</small></span>
       </li>`;
@@ -1297,21 +1109,22 @@ function viewScore() {
   const table = `
     <div class="table-wrap">
       <table class="breakdown">
-        <thead><tr><th scope="col">Lag</th>${BARS.map((b, i) => `<th scope="col" title="${esc(b.name)}">${i + 1}</th>`).join('')}<th scope="col">Sum</th></tr></thead>
+        <thead><tr><th scope="col">Lag</th>${BARS.map((b) => `<th scope="col" title="${esc(b.name)}">${esc(shortName(b.name))}</th>`).join('')}<th scope="col">Sum</th></tr></thead>
         <tbody>${ranked.map((t) => `<tr><td>${esc(t.name)}</td>${BARS.map((b) => `<td>${barScore(b, t.id) || '·'}</td>`).join('')}<td class="tot">${t.score}</td></tr>`).join('')}</tbody>
       </table>
     </div>`;
+  const feed = store.activity(80).map((e) => ({ e, text: describe(e) })).filter((x) => x.text).slice(0, 15);
   return `
-    ${finished && lead ? `
+    ${allAtFinale && lead ? `
       <div class="winner">
         ${icon('trophy')}
-        <span class="eyebrow">Kveldens vinner</span>
-        <h2 class="h-display">${tie ? 'Uavgjort!' : esc(lead.name)}</h2>
-        <span class="muted">${tie ? 'Avgjør det med en siste skål.' : `${lead.score} poeng etter ${BARS.length} barer`}</span>
+        <span class="eyebrow">Alle er på finalen</span>
+        <h2 class="h-display">${tie ? 'Uavgjort!' : `${esc(lead.name)} leder`}</h2>
+        <span class="muted">${tie ? 'Avgjør det i finaleoppgavene.' : `${lead.score} poeng. Finaleoppgavene kan fortsatt snu alt.`}</span>
       </div>` : `
       <div class="section">
         <h2 class="h-display">Poengtavle</h2>
-        <p class="lede">Etter ${state.visited.length} av ${BARS.length} barer. Poeng deles ut under oppgavene på hver bar.</p>
+        <p class="lede">Oppdateres i sanntid på alle telefoner. Alle lag kan føre poeng under oppgavene på hver bar.</p>
       </div>`}
     <ol class="board" aria-label="Stilling">${rows}</ol>
     <div class="action-grid">
@@ -1319,58 +1132,90 @@ function viewScore() {
       <button class="btn" type="button" data-action="pick">${icon('dice')} Hvem må?</button>
     </div>
     <section class="section">
+      <h3 class="section-title">Siste hendelser <span class="sync-label"><span class="sync-dot is-${store.status}"></span>${esc(SYNC_TEXT[store.status])}</span></h3>
+      ${feed.length ? `<ul class="feed">${feed.map(({ e, text }) => {
+        const t = teamById(e.b);
+        return `<li><span class="feed-time mono">${new Date(e.t).toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' })}</span><span>${esc(text)}${t ? ` <span class="muted">· ført av ${esc(t.name)}</span>` : ''}</span></li>`;
+      }).join('')}</ul>` : '<p class="muted small" style="margin:0">Ingen poeng ennå. Første oppgave venter.</p>'}
+    </section>
+    <section class="section">
       <h3 class="section-title">Poeng per bar</h3>
       ${table}
-    </section>
-    <p class="note">Poengene lagres på denne telefonen. La én person være dommer og dele stillingen i gruppechatten.</p>`;
+    </section>`;
 }
 
 function viewTeams() {
-  const cards = state.teams.map((t) => `
+  const me = myTeam();
+  const cards = S().teams.map((t) => `
     <div class="team-card" style="--team:${t.color}">
       <div class="team-card-head">
         <input class="input input-team" id="team-name-${t.id}" data-team-name="${t.id}" value="${esc(t.name)}" maxlength="30" aria-label="Lagnavn" autocomplete="off">
-        ${state.teams.length > 1 ? `<button class="icon-btn" type="button" data-action="remove-team" data-team="${t.id}" aria-label="Fjern ${esc(t.name)}">${icon('close')}</button>` : ''}
+        ${S().teams.length > 1 ? `<button class="icon-btn" type="button" data-action="remove-team" data-team="${t.id}" aria-label="Fjern ${esc(t.name)}">${icon('close')}</button>` : ''}
       </div>
       <div class="color-row" role="group" aria-label="Lagfarge">
-        ${TEAM_COLORS.map((c) => `<button class="color-dot" type="button" style="--team:${c}" aria-pressed="${c === t.color}" aria-label="Farge ${c}" data-action="team-color" data-team="${t.id}" data-color="${c}"></button>`).join('')}
+        ${TEAM_COLORS.map((col) => `<button class="color-dot" type="button" style="--team:${col}" aria-pressed="${col === t.color}" aria-label="Farge ${col}" data-action="team-color" data-team="${t.id}" data-color="${col}"></button>`).join('')}
       </div>
       <div class="members">
-        ${t.members.length ? t.members.map((m, idx) => `<span class="member">${esc(m)}<button type="button" data-action="remove-member" data-team="${t.id}" data-idx="${idx}" aria-label="Fjern ${esc(m)}">${icon('close')}</button></span>`).join('') : '<span class="muted small">Ingen deltakere ennå</span>'}
+        ${t.members.length ? t.members.map((m) => `<span class="member">${esc(m.name)}<button type="button" data-action="remove-member" data-team="${t.id}" data-member="${m.id}" aria-label="Fjern ${esc(m.name)}">${icon('close')}</button></span>`).join('') : '<span class="muted small">Ingen deltakere ennå</span>'}
       </div>
       <form class="add-row" data-add-member="${t.id}">
         <input class="input" id="member-${t.id}" placeholder="Navn på deltaker" maxlength="40" autocomplete="off" aria-label="Ny deltaker på ${esc(t.name)}">
         <button class="btn" type="submit">${icon('plus')} Legg til</button>
       </form>
+      <button class="btn btn-sm ${me?.id === t.id ? 'btn-primary' : ''}" type="button" data-action="set-my-team" data-team="${t.id}">${me?.id === t.id ? `${icon('check')} Denne telefonen er på ${esc(t.name)}` : 'Jeg er på dette laget'}</button>
     </div>`).join('');
   const people = allParticipants().length;
+  const status = store.status;
   return `
     <div class="section">
-      <h2 class="h-display">${state.setupDone ? 'Lag og deltakere' : 'Velkommen til kvelden'}</h2>
-      <p class="lede">${state.setupDone
-        ? `${state.teams.length} lag og ${people} deltakere. Du kan endre lagene underveis, og poengene blir stående.`
-        : 'Del gjengen inn i lag og legg til deltakerne. Hver bar har oppgaver som gir poeng, og poengtavla viser hvem som leder.'}</p>
+      <h2 class="h-display">${S().setupDone ? 'Lag og deltakere' : 'Velkommen til kvelden'}</h2>
+      <p class="lede">${S().setupDone
+        ? `${S().teams.length} lag og ${people} deltakere. Endringer vises med en gang på alle telefoner.`
+        : 'Del gjengen inn i lag og legg til deltakerne. Hvert lag får sin egen rute, og alle møtes til finale. Alt dere gjør her vises med en gang på alle som åpner appen.'}</p>
+    </div>
+    <div class="sync-card">
+      <span class="sync-dot is-${status}"></span>
+      <div class="sync-text"><b>${esc(SYNC_TEXT[status])}</b><span class="muted small">${status === 'local' ? 'Poengene lagres bare på denne telefonen.' : `Rom: ${esc(room)}${store.pending ? ` · ${store.pending} endring(er) venter på nett` : ''}`}</span></div>
+      <button class="btn btn-sm" type="button" data-action="invite">${icon('share')} Inviter</button>
     </div>
     ${cards}
     <div class="row-wrap">
-      ${state.teams.length < TEAM_COLORS.length ? `<button class="btn" type="button" data-action="add-team">${icon('plus')} Legg til lag</button>` : ''}
+      ${S().teams.length < TEAM_COLORS.length ? `<button class="btn" type="button" data-action="add-team">${icon('plus')} Legg til lag</button>` : ''}
       <button class="btn" type="button" data-action="shuffle-teams">${icon('shuffle')} Bland lagene</button>
     </div>
     <div class="field">
       <label for="start-time">Starttid fra hotellet</label>
-      <input class="input input-time" type="time" id="start-time" value="${esc(state.startTime)}">
+      <input class="input input-time" type="time" id="start-time" value="${esc(S().startTime)}">
     </div>
-    ${state.setupDone ? '' : `<button class="btn btn-primary btn-block" type="button" data-action="start-night">${icon('walk')} Start kvelden</button>`}
+    <div class="field">
+      <label for="finale">Finale, der alle lagene møtes</label>
+      <select class="input" id="finale">${BARS.map((b) => `<option value="${b.id}" ${b.id === S().finale ? 'selected' : ''}>${esc(b.name)} (${esc(CATEGORIES[b.cat].label)})</option>`).join('')}</select>
+    </div>
+    ${S().setupDone
+      ? `<button class="btn" type="button" data-action="replan">${icon('shuffle')} Lag nye ruter for alle lag</button>`
+      : `<button class="btn btn-primary btn-block" type="button" data-action="start-night">${icon('walk')} Start kvelden</button>`}
+    <section class="section">
+      <h3 class="section-title">Google Earth-visning</h3>
+      <p class="muted small" style="margin:0">${engineKind === 'earth'
+        ? 'Fotorealistisk 3D fra Google er på.'
+        : googleKey()
+          ? 'Nøkkelen er lagt inn. Trykk på jordkloden ved kartet for å bytte visning.'
+          : 'Lim inn en nøkkel til Google Map Tiles API for å se byen fotorealistisk, som i Google Earth. En nøkkel lagt inn her gjelder bare denne telefonen.'}</p>
+      <form class="add-row" data-google-key>
+        <input class="input" id="google-key" placeholder="Google API-nøkkel" autocomplete="off" spellcheck="false" value="${esc(prefs.googleKey)}" aria-label="Google API-nøkkel">
+        <button class="btn" type="submit">Bruk</button>
+      </form>
+    </section>
     <section class="section">
       <h3 class="section-title">Nullstill</h3>
       ${confirmReset
-        ? `<div class="row-wrap"><span class="small">Slette alle poeng, lag og innsjekkinger?</span>
+        ? `<div class="row-wrap"><span class="small">Slette alle poeng, lag og innsjekkinger for alle?</span>
             <button class="btn btn-danger btn-sm" type="button" data-action="reset-confirm">Ja, nullstill</button>
             <button class="btn btn-sm" type="button" data-action="reset-cancel">Avbryt</button></div>`
-        : `<button class="btn btn-danger" type="button" data-action="reset">Nullstill kvelden</button>`}
+        : '<button class="btn btn-danger" type="button" data-action="reset">Nullstill kvelden</button>'}
     </section>
     <p class="note">Pass på hverandre. Nødnummer i Danmark: <b>112</b>.</p>
-    <p class="credits">Kart: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-bidragsytere</a>. Gangruter: FOSSGIS OSRM. 3D: MapLibre GL JS. Åpningstider kan endre seg, så sjekk før dere går.</p>`;
+    <p class="credits">Kart: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap-bidragsytere</a>. Fotorealistisk 3D: Google. Gangruter: FOSSGIS OSRM. Sanntid: ntfy.sh. Åpningstider kan endre seg, så sjekk før dere går.</p>`;
 }
 
 /* ---------- Hendelser ---------- */
@@ -1379,16 +1224,17 @@ function onClick(e) {
   if (!el) return;
   if (el.matches('#tabs [data-tab]') && !el.dataset.action) {
     tab = el.dataset.tab;
-    render();
+    render(true);
     if (!desktopMQ.matches) setSheet('open');
     return;
   }
   const d = el.dataset;
   const i = d.i !== undefined && d.i !== '' ? Number(d.i) : null;
+  const team = d.team ? teamById(d.team) : null;
   switch (d.action) {
     case 'tab':
       tab = d.tab;
-      render();
+      render(true);
       setSheet('open');
       break;
     case 'select-bar':
@@ -1401,12 +1247,12 @@ function onClick(e) {
     case 'fly-bar':
       setSheet('peek');
       stopModes();
-      flyTo(BARS[i].coord, { zoom: 18, pitch: 66 });
+      engine?.flyTo(BARS[i].coord, { close: true });
       break;
     case 'fly-hotel':
       setSheet('peek');
       stopModes();
-      flyTo(HOTEL.coord);
+      engine?.flyTo(HOTEL.coord);
       break;
     case 'walk':
       startWalk(Number(d.leg));
@@ -1422,6 +1268,12 @@ function onClick(e) {
       speedIdx = (speedIdx + 1) % WALK_SPEEDS.length;
       renderWalkHud();
       break;
+    case 'cam-toggle':
+      prefs.cam = prefs.cam === 'gate' ? 'drone' : 'gate';
+      savePrefs();
+      renderWalkHud();
+      renderLiveHud();
+      break;
     case 'walk-exit':
       exitWalk();
       break;
@@ -1435,19 +1287,23 @@ function onClick(e) {
       exitLive();
       break;
     case 'overview':
-      if (orbit) stopOrbit(); else { setSheet('peek'); flyOverview(); }
+      if (engine?.orbiting) engine.stopOrbit();
+      else { setSheet('peek'); stopModes(); engine?.overview({ onDone: setControlState }); }
       setControlState();
+      break;
+    case 'engine-toggle':
+      prefs.engine = engineKind === 'earth' ? 'map' : null;
+      savePrefs();
+      startEngine(preferredEngine());
       break;
     case 'daynight':
-      state.night = !isNight();
-      save();
-      if (map) map.setStyle(STYLE_URL, { diff: false });
+      prefs.night = !isNight();
+      savePrefs();
+      engine?.setNight(isNight());
       renderControls();
-      setControlState();
       break;
     case 'north':
-      stopOrbit();
-      map?.easeTo({ bearing: 0, duration: 600 });
+      engine?.resetNorth();
       break;
     case 'checkin':
       $('#toast').hidden = true;
@@ -1458,108 +1314,133 @@ function onClick(e) {
       toggleAward(d.bar, d.task, d.team);
       break;
     case 'adjust':
-      adjust(d.bar, d.team, Number(d.delta));
+      store.dispatch([{ o: 'adj', bar: d.bar, tm: d.team, d: Number(d.delta) }], by());
       break;
     case 'pick':
       pickRandom();
+      break;
+    case 'ask-team':
+      askTeam();
+      break;
+    case 'set-my-team':
+      prefs.myTeam = d.team;
+      savePrefs();
+      $('#modal').hidden = true;
+      render(true);
+      toast(`Denne telefonen følger ${team?.name || 'laget'}.`);
       break;
     case 'modal-close':
       $('#modal').hidden = true;
       break;
     case 'share':
-      shareScore();
+      shareText('Kbh Bar til bar', scoreText(), 'Kopier stillingen');
+      break;
+    case 'invite':
+      shareText('Bli med på Kbh Bar til bar', `Bli med på bar-til-bar i København! Åpne appen og velg laget ditt:\n${inviteLink()}`, 'Kopier lenken');
       break;
     case 'copy':
       copyText(d.text);
       break;
     case 'add-team': {
-      const used = new Set(state.teams.map((t) => t.color));
-      const color = TEAM_COLORS.find((c) => !used.has(c)) || TEAM_COLORS[0];
-      state.teams.push({ id: uid(), name: `Lag ${state.teams.length + 1}`, color, members: [] });
-      save();
-      render();
+      const used = new Set(S().teams.map((t) => t.color));
+      const color = TEAM_COLORS.find((col) => !used.has(col)) || TEAM_COLORS[0];
+      store.dispatch([{ o: 'tm', id: uid('t'), n: `Lag ${S().teams.length + 1}`, col: color, x: Date.now() }], by());
       break;
     }
     case 'remove-team':
-      state.teams = state.teams.filter((t) => t.id !== d.team);
-      save();
-      render();
+      if (team) store.dispatch([teamEvent(team, { del: true })], by());
+      if (prefs.myTeam === d.team) { prefs.myTeam = null; savePrefs(); }
       break;
     case 'team-color':
-      state.teams.find((t) => t.id === d.team).color = d.color;
-      save();
-      render();
+      if (team) store.dispatch([teamEvent(team, { color: d.color })], by());
       break;
     case 'remove-member': {
-      const t = state.teams.find((x) => x.id === d.team);
-      t.members.splice(Number(d.idx), 1);
-      save();
-      render();
+      const m = team?.members.find((x) => x.id === d.member);
+      if (m) store.dispatch([memberEvent(m, team.id, { del: true })], by());
       break;
     }
     case 'shuffle-teams':
       shuffleTeams();
       break;
     case 'start-night':
-      state.setupDone = true;
-      save();
+      store.dispatch([{ o: 'go', v: true }, ...lockRoutes()], by());
       tab = 'route';
-      render();
+      render(true);
       setSheet('peek');
-      toast('God tur! Første stopp er Taphouse.');
+      if (!myTeam()) askTeam();
+      else toast('God tur! Hvert lag har fått sin egen rute.');
+      break;
+    case 'replan':
+      store.dispatch(lockRoutes(), by());
+      toast('Nye ruter er laget for alle lag');
       break;
     case 'reset':
       confirmReset = true;
-      render();
+      render(true);
       break;
     case 'reset-cancel':
       confirmReset = false;
-      render();
+      render(true);
       break;
-    case 'reset-confirm': {
+    case 'reset-confirm':
       confirmReset = false;
-      const keepNight = state.night;
-      Object.assign(state, defaultState(), { night: keepNight });
-      save();
+      store.dispatch([{ o: 'rst' }], by());
       tab = 'teams';
-      refreshMapData();
-      render();
-      toast('Kvelden er nullstilt');
+      render(true);
+      toast('Kvelden er nullstilt for alle');
       break;
-    }
     default:
       break;
   }
 }
 
+const nameTimers = {};
 function onInput(e) {
   const t = e.target;
-  if (t.dataset.teamName) {
-    const team = state.teams.find((x) => x.id === t.dataset.teamName);
-    team.name = t.value.trim() || 'Lag uten navn';
-    save();
-    renderTop();
-  } else if (t.id === 'start-time' && t.value) {
-    state.startTime = t.value;
-    save();
-    renderPeek();
+  if (!t.dataset.teamName) return;
+  const id = t.dataset.teamName;
+  clearTimeout(nameTimers[id]);
+  nameTimers[id] = setTimeout(() => {
+    const team = teamById(id);
+    const name = t.value.trim();
+    if (team && name && name !== team.name) store.dispatch([teamEvent(team, { name })], by());
+  }, 700);
+}
+
+function onChangeField(e) {
+  const t = e.target;
+  if (t.id === 'start-time' && t.value && t.value !== S().startTime) {
+    store.dispatch([{ o: 'st', v: t.value }], by());
+  } else if (t.id === 'finale' && t.value !== S().finale) {
+    const list = [{ o: 'fin', v: t.value }];
+    if (S().setupDone) list.push(...lockRoutes(t.value));
+    store.dispatch(list, by());
+    toast(`Finalen er nå på ${BARS.find((b) => b.id === t.value)?.name}`);
   }
 }
 
 function onSubmit(e) {
-  const form = e.target.closest('[data-add-member]');
+  const form = e.target.closest('[data-add-member], [data-google-key]');
   if (!form) return;
   e.preventDefault();
-  addMember(form.dataset.addMember);
+  if (form.dataset.addMember) {
+    addMember(form.dataset.addMember);
+    return;
+  }
+  prefs.googleKey = $('#google-key').value.trim();
+  prefs.engine = null;
+  savePrefs();
+  if (prefs.googleKey) toast('Laster Google 3D …');
+  $('#google-key').blur();
+  startEngine(preferredEngine()).then(() => render(true));
 }
 
 function onKeydown(e) {
   if (e.key === 'Escape' && !$('#modal').hidden) $('#modal').hidden = true;
   if (e.target.closest('#tabs') && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
-    const order = ['route', 'bar', 'score', 'teams'];
-    const idx = order.indexOf(tab);
-    tab = order[(idx + (e.key === 'ArrowRight' ? 1 : order.length - 1)) % order.length];
-    render();
+    const tabs = ['route', 'bar', 'score', 'teams'];
+    tab = tabs[(tabs.indexOf(tab) + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    render(true);
     document.getElementById(`tab-${tab}`)?.focus();
   }
 }
@@ -1567,8 +1448,14 @@ function onKeydown(e) {
 /* ---------- Oppstart ---------- */
 document.addEventListener('click', onClick);
 document.addEventListener('input', onInput);
+document.addEventListener('change', onChangeField);
 document.addEventListener('submit', onSubmit);
 document.addEventListener('keydown', onKeydown);
+document.addEventListener('focusout', () => {
+  setTimeout(() => {
+    if (bodyDirty && !document.activeElement?.closest?.('#sheet-body')) render(true);
+  }, 0);
+});
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') $('#modal').hidden = true; });
 desktopMQ.addEventListener('change', measurePeek);
 window.addEventListener('resize', () => requestAnimationFrame(measurePeek));
@@ -1579,8 +1466,9 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 initSheetDrag();
-render();
-if (!state.setupDone && !desktopMQ.matches) setSheet('open');
-initMap();
-loadRoutes();
+render(true);
+if (!S().setupDone && !desktopMQ.matches) setSheet('open');
+startEngine(preferredEngine());
+store.connect();
+if (store.status === 'local') maybeAskTeam();
 document.fonts?.ready.then(measurePeek);
